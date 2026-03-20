@@ -1,0 +1,42 @@
+# @package _global_
+
+seed: 42
+
+# Dataset configuration
+hf_dataset_name: wanglab/cafa5
+hf_dataset_config: experiment_data_reasoning
+
+# Model configuration
+embed_model_path: facebook/esm2_t36_3B_UR50D
+embed_model_type: esm2
+
+# Vocabulary selection per aspect (based on training data frequency)
+vocab_limits:
+  mf:
+    method: "min_freq"
+    value: 20
+  bp:
+    method: "min_freq"
+    value: 20
+  cc:
+    method: "min_freq"
+    value: 20
+
+# Organism embedding configuration
+top_n_organisms: 200
+
+max_go_terms: 500
+
+# Processing configuration
+num_proc: 14
+
+# Output configuration
+output_dir: artifacts/preprocessed
+dataset_name: cafa5_processed
+
+# Hydra configuration
+hydra:
+  run:
+    dir: ./artifacts/preprocessing/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false

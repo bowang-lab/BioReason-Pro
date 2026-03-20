@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bioreason-pro"
+version = "0.1.0"
+description = "Protein Function Prediction with Multimodal Reasoning"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "torch",
+    "torchvision",
+    "transformers",
+    "accelerate",
+    "datasets",
+    "peft",
+    "pytorch_lightning",
+    "wandb",
+    "trl[vllm]",
+    "bitsandbytes",
+    "deepspeed",
+    "esm>=3.2.0",
+    "goatools",
+    "cafaeval",
+    "colorama",
+    "flash-attn>=2.3.0",
+    "typing-extensions",
+    "triton",
+    "sentence-transformers",
+    "torch_geometric",
+    "networkx",
+    "obonet",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+    "mypy",
+]
+
+[tool.setuptools]
+packages = ["bioreason2"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

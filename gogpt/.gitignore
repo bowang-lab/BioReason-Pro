@@ -1,0 +1,89 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+*.env
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Pyre type checker
+.pyre/
+
+# Mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# VS Code
+.vscode/
+
+# IDE
+.idea/
+
+# Model checkpoints and weights
+*.ckpt
+*.h5
+*.pth
+*.pt
+
+# Hugging Face cache
+*.jsonl
+*.arrow
+*.lock
+
+# Data files (keep structure but ignore contents)
+*.csv
+*.tsv
+*.parquet
+*.pkl
+*.npy
+*.npz
+*.tmp
+
+# TensorBoard and WandB
+runs/
+wandb/
+*.tfevents.*
+
+# Logs
+*.log
+*.out
+*.err
+lightning_logs/
+
+# Artifacts directory contents (but keep .gitkeep)
+artifacts/**
+!artifacts/.gitkeep
+!artifacts/
+
+# Evaluation data (but keep .gitkeep)
+data/evals/**
+!data/evals/.gitkeep
+
+# MacOS and system files
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+
+# Temporary files
+.nfs*
+*.tmp
+temp/

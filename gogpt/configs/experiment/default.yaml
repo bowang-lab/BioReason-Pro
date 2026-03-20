@@ -1,0 +1,83 @@
+# @package _global_
+
+experiment_name: gogpt_default
+seed: 42
+
+# PyTorch settings
+pytorch:
+  matmul_precision: medium
+  enable_tf32: true
+
+# Model configuration
+model:
+  n_layer: 12
+  n_head: 12
+  n_embd: 1080
+  block_size: 2048
+  bias: true
+  dropout: 0.1
+  protein_embedding_dim: 1280
+  embed_model_path: facebook/esm2_t33_650M_UR50D
+  protein_layer_index: 30
+  use_gated_attention: true
+
+# Data configuration
+data:
+  preprocessed_path: ${hydra:runtime.cwd}/artifacts/preprocessed/cafa5_processed
+  batch_size: 10
+  num_workers: 2
+  persistent_workers: true
+  prefetch_factor: 8
+  pin_memory: false
+
+# Training configuration
+training:
+  learning_rate: 1e-4
+  warmup_fraction: 0.1
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  gradient_clip_val: 1.0
+  log_generations: false
+  accumulate_grad_batches: 4
+
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  limit_val_batches: 0.2
+  num_sanity_val_steps: 0
+  log_every_n_steps: 100
+
+  devices: 4
+  accelerator: gpu
+  precision: bf16-mixed
+  strategy: ddp_find_unused_parameters_true
+  enable_progress_bar: true
+
+# Resume from checkpoint
+resume:
+  checkpoint_path: null
+
+# Checkpoint configuration
+checkpoints:
+  - monitor: val_f1
+    mode: max
+    save_top_k: 3
+    save_last: false
+    filename: best-{epoch:02d}-{val_f1:.3f}
+    dirpath: checkpoints/best
+    every_n_epochs: 1
+
+  - monitor: null
+    save_top_k: 0
+    save_last: true
+    filename: last
+    dirpath: checkpoints
+
+# Wandb configuration
+wandb:
+  enabled: true
+  offline: false
+  project: GO-GPT
+  group: ${experiment_name}
+  name: run_${now:%Y-%m-%d_%H-%M-%S}
+  log_model: false
+  save_dir: wandb
