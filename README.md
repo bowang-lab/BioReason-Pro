@@ -43,7 +43,7 @@ Try BioReason-Pro directly through our web-based inference server:
 
 🔗 **[bioreason.net](https://bioreason.net)**
 
-Precomputed predictions for 240,000+ proteins (including the Human Protein Atlas) are available at [bioreason.net/atlas](https://bioreason.net/atlas).
+Precomputed predictions for 240,000+ proteins (including the Human Protein Atlas) are available at [bioreason.net](https://bioreason.net). (Toward end of main page)
 
 <br>
 
