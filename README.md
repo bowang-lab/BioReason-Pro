@@ -48,6 +48,14 @@ The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins 
 The training and test sets load directly through `datasets`. Structures and GO embeddings are
 fetched with [`scripts/download_assets.py`](scripts/download_assets.py) — see [Training](#training).
 
+> **Train/test overlap.** 504 of the 8,630 test proteins (5.8%) also appear in the released
+> training set. Scores computed over the full test set are therefore optimistic by that
+> margin. Exclude them for a clean number:
+> ```python
+> train_ids = set(load_dataset("wanglab/bioreason-pro-sft-reasoning-data","default")["train"]["protein_id"])
+> test = test.filter(lambda r: r["protein_id"] not in train_ids)
+> ```
+
 **Note on coverage:** the SFT set is 124,367 of the 133,492 curated proteins. The remaining
 9,125 were excluded because they lack InterPro annotations (6,574) or a usable reasoning
 trace, and so have no supervision target.
@@ -270,7 +278,7 @@ need to change. Open it and fill in the `Paths` block near the top:
 | `STRUCTURE_DIR` | the `structures` dir from step 1 | no — empty runs sequence-only |
 | `GO_OBO_PATH` | already defaults to the ontology shipped in this repo | no |
 | `NUM_NODES` / `BATCH_SIZE` | match your cluster (defaults: 2 nodes, batch 4/GPU) | yes if not 2 nodes |
-| `WANDB_ENTITY` | your W&B entity, or leave empty | no |
+| `WANDB_ENTITY` | your W&B entity. Left empty, the script sets `WANDB_MODE=offline` rather than logging to someone else's account | no |
 
 Then uncomment the `#SBATCH` header at the top and adjust it for your scheduler.
 
@@ -278,7 +286,7 @@ Then uncomment the `#SBATCH` header at the top and adjust it for your scheduler.
 
 ```bash
 sbatch scripts/sh_train_protein_qwen_staged.sh
-# or, on a single machine:
+# or, on a single machine (srun is used only when SLURM_JOB_ID is set):
 bash scripts/sh_train_protein_qwen_staged.sh
 ```
 
@@ -312,9 +320,21 @@ RUN_STAGE1=true sbatch scripts/sh_train_protein_qwen_staged.sh
 | Optimiser | lr 1e-4, weight decay 0.01, warmup 5%, 10 epochs |
 | Sequence lengths | text 10000, protein 2000 |
 
+### Convert the checkpoint
+
+Training writes a PyTorch Lightning `.ckpt`; `eval.py` and `predict.py` need a HuggingFace
+directory. Convert before evaluating:
+
+```bash
+bash scripts/sh_convert_unsloth_ddp_to_hf_ckpt.sh /path/to/last.ckpt /path/to/output-hf
+```
+
+The hyperparameters inside that script must match the run that produced the checkpoint
+(they default to the released SFT settings, including `LORA_DROPOUT=0`).
+
 ### Evaluation
 
-Evaluation is two steps: generate predictions, then score them.
+Evaluation is three steps: convert (above), generate predictions, then score them.
 
 **1. Generate.** Edit the `Paths` block of `scripts/sh_eval.sh` (`GO_EMBEDDINGS_PATH`,
 `DATASET_CACHE_DIR`, `STRUCTURE_DIR`, and `MODEL_PATH` — either your own checkpoint or a

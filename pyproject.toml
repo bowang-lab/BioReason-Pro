@@ -31,7 +31,19 @@ dependencies = [
     # bioreason2/models/protein_llm.py; requires a CUDA GPU at import time.
     "unsloth",
     "unsloth_zoo",
-    # esm>=3.2.1 must be installed separately: pip install esm --no-deps (conflicts with vllm on transformers version)
+    # esm>=3.2.1 must be installed separately: pip install esm --no-deps (conflicts with vllm on transformers version).
+    # --no-deps strips esm's own requirements, so the ones we actually need are re-declared here.
+    # Deliberately NOT re-declared: transformers<4.48.2 and torchtext, which are the conflict.
+    "biopython",        # Bio.PDB, imported directly by bioreason2/dataset/cafa5/collate.py
+    "biotite",
+    "einops",
+    "msgpack-numpy",
+    "scikit-learn",
+    "tenacity",
+    "attrs",
+    "cloudpathlib",
+    "brotli",
+    "zstd",
     "goatools",
     "cafaeval",
     "colorama",
