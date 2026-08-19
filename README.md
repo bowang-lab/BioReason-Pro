@@ -41,7 +41,7 @@ The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins 
 |---------|----------|------|
 | [bioreason-pro-sft-reasoning-data](https://huggingface.co/datasets/wanglab/bioreason-pro-sft-reasoning-data) | SFT training set: 117,002 train / 7,365 validation proteins with GPT-5 reasoning traces, GO terms, InterPro domains, STRING PPIs | 632 MB |
 | [bioreason-pro-test-data](https://huggingface.co/datasets/wanglab/bioreason-pro-test-data) | Held-out test set, 8,630 proteins | 47 MB |
-| [bioreason-pro-structures](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | AlphaFold backbone structures for all 131,838 referenced proteins | ~34 GB |
+| [bioreason-pro-structures](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | AlphaFold backbone structures covering all 131,838 referenced proteins | ~34 GB |
 | [bioreason-pro-go-embeddings](https://huggingface.co/datasets/wanglab/bioreason-pro-go-embeddings) | Qwen3-Embedding-4B vectors for 43,248 GO terms, used to initialise the GO graph encoder | 177 MB |
 | [protein_catalogue](https://huggingface.co/datasets/wanglab/protein_catalogue) | Precomputed predictions for 223,000+ proteins | — |
 
@@ -182,7 +182,7 @@ both and lays them out exactly as the scripts expect:
 python scripts/download_assets.py --dest /data/bioreason
 
 # -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  ~250 MB down, 338 MB on disk
-# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down,  ~60 GB on disk
+# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down,  ~57 GB on disk
 ```
 
 | Asset | Repo | Required? |
@@ -193,6 +193,10 @@ python scripts/download_assets.py --dest /data/bioreason
 The download is resumable — re-run it if interrupted. To fetch only the required asset, add
 `--skip-structures`; training then runs sequence-only and will not reproduce the released
 checkpoint.
+
+By default only the ~123k structures the released datasets actually reference are written to
+disk. The shards hold ~370k, so this saves roughly 90 GB; pass `--all-structures` to keep
+everything.
 
 Verify at any time:
 

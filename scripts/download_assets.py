@@ -3,8 +3,12 @@
 Download the two large assets BioReason-Pro training and evaluation need but that
 are not part of the git repository:
 
-  * protein structures   -> wanglab/bioreason-pro-structures   (~34 GB download, ~60 GB on disk)
-  * GO term embeddings   -> wanglab/bioreason-pro-go-embeddings (~250 MB download, 338 MB on disk)
+  * protein structures   -> wanglab/bioreason-pro-structures   (~34 GB download, ~57 GB on disk)
+  * GO term embeddings   -> wanglab/bioreason-pro-go-embeddings (177 MB download, 338 MB on disk)
+
+By default only the ~132k structures the released datasets actually reference are
+written to disk; the shards themselves hold ~370k. Pass --all-structures to keep
+everything (~150 GB).
 
 Both land as plain directories that you point the training scripts at:
 
@@ -46,7 +50,7 @@ STRUCTURE_SHARD_PREFIXES = ("af_shards/", "af_shards_extra/", "interlabel_shards
 # Extraction
 # ---------------------------------------------------------------------------
 
-def _extract_shard(tar_path: str, dest_dir: str) -> int:
+def _extract_shard(tar_path: str, dest_dir: str, keep: set = None) -> int:
     """Extract one shard into dest_dir as a flat directory of .cif files.
 
     Members inside the shards are gzipped (`AF-XXXX-F1-model_v4.cif.gz`) but the
@@ -54,19 +58,26 @@ def _extract_shard(tar_path: str, dest_dir: str) -> int:
     (`AF-XXXX-F1-model_v4.cif`). We therefore gunzip on the way out. Getting this
     wrong is silent: collate.py checks os.path.exists() and falls back to empty
     coordinates without warning, so every structure would be ignored.
+
+    `keep` restricts extraction to the filenames the datasets actually reference.
+    The shards hold ~370k structures but only ~132k are referenced, so filtering
+    saves roughly 90 GB of disk.
     """
     written = 0
     with tarfile.open(tar_path, "r:gz") as tar:
         for member in tar:
             if not member.isfile():
                 continue
+            name = os.path.basename(member.name)
+            if name.endswith(".gz"):
+                name = name[: -len(".gz")]
+            if keep is not None and name not in keep:
+                continue
             fileobj = tar.extractfile(member)
             if fileobj is None:
                 continue
-            name = os.path.basename(member.name)
             data = fileobj.read()
-            if name.endswith(".gz"):
-                name = name[: -len(".gz")]
+            if os.path.basename(member.name).endswith(".gz"):
                 data = gzip.decompress(data)
             with open(os.path.join(dest_dir, name), "wb") as out:
                 out.write(data)
@@ -74,13 +85,40 @@ def _extract_shard(tar_path: str, dest_dir: str) -> int:
     return written
 
 
+def _referenced_structure_names() -> set:
+    """Filenames referenced by the released datasets (~132k of the ~370k shipped)."""
+    from datasets import load_dataset
+
+    names = set()
+    for repo, split in [
+        ("wanglab/bioreason-pro-sft-reasoning-data", "train"),
+        ("wanglab/bioreason-pro-sft-reasoning-data", "validation"),
+        ("wanglab/bioreason-pro-test-data", "test"),
+    ]:
+        ds = load_dataset(repo, "default", split=split)
+        names.update(p for p in ds["structure_path"] if p)
+    return names
+
+
 def _shard_marker(dest_dir: str, shard: str) -> str:
     return os.path.join(dest_dir, ".shards", shard.replace("/", "__") + ".done")
 
 
-def download_structures(dest_dir: str, num_workers: int, keep_archives: bool) -> None:
+def download_structures(dest_dir: str, num_workers: int, keep_archives: bool,
+                        all_structures: bool = False) -> None:
     os.makedirs(dest_dir, exist_ok=True)
     os.makedirs(os.path.join(dest_dir, ".shards"), exist_ok=True)
+
+    keep = None
+    if not all_structures:
+        print("structures: resolving which files the datasets reference …")
+        try:
+            keep = _referenced_structure_names()
+            print(f"  {len(keep)} referenced (shards hold ~370k; "
+                  f"filtering saves ~90 GB of disk)")
+        except Exception as exc:
+            print(f"  could not read datasets ({exc}); extracting everything")
+            keep = None
 
     api = HfApi()
     shards = sorted(
@@ -100,7 +138,7 @@ def download_structures(dest_dir: str, num_workers: int, keep_archives: bool) ->
         path = hf_hub_download(
             STRUCTURES_REPO, shard, repo_type="dataset", cache_dir=archive_dir
         )
-        n = _extract_shard(path, dest_dir)
+        n = _extract_shard(path, dest_dir, keep)
         if not keep_archives:
             try:
                 os.remove(path)
@@ -206,6 +244,9 @@ def main() -> int:
                     help="Parallel shard downloads")
     ap.add_argument("--keep-archives", action="store_true",
                     help="Keep the downloaded .tar.gz shards instead of deleting them")
+    ap.add_argument("--all-structures", action="store_true",
+                    help="Extract every structure in the shards (~370k files, ~150 GB) "
+                         "instead of only the ~132k the released datasets reference (~57 GB)")
     ap.add_argument("--verify", action="store_true",
                     help="Only verify existing downloads against the released datasets")
     args = ap.parse_args()
@@ -219,7 +260,8 @@ def main() -> int:
     if not args.skip_go_embeddings:
         download_go_embeddings(go_dir)
     if not args.skip_structures:
-        download_structures(structures_dir, args.num_workers, args.keep_archives)
+        download_structures(structures_dir, args.num_workers, args.keep_archives,
+                            args.all_structures)
 
     print("\nVerifying …")
     problems = verify(structures_dir, go_dir)
