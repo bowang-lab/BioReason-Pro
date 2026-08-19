@@ -335,6 +335,12 @@ To score a released checkpoint without training anything, point `MODEL_PATH` at 
 [`wanglab/bioreason-pro-sft`](https://huggingface.co/wanglab/bioreason-pro-sft) or
 [`wanglab/bioreason-pro-rl`](https://huggingface.co/wanglab/bioreason-pro-rl).
 
+**A note on PPI.** Training includes STRING interaction partners in the prompt
+(`PPI_IN_PROMPT=True`), but the released test set has no `ppi_formatted` column, so
+evaluation runs without them and `scripts/sh_eval.sh` sets `PPI_IN_PROMPT=False`
+accordingly. This asymmetry is inherent to the released data, not a misconfiguration —
+but it does mean the evaluation prompt differs from the training prompt.
+
 > **Two things that will silently give you wrong numbers.**
 > The GO encoder flags at evaluation must match training exactly
 > (`512 / 3 / 8 / 200 / 2560`, `--unified_go_encoder True`, `--protein_embedding_layer 37`) or
