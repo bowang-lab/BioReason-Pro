@@ -153,6 +153,94 @@ Organism names must match the format in `organism_list.txt` exactly. Unsupported
 
 <br>
 
+## Training
+
+Reproducing the SFT checkpoint requires a multi-GPU node (the released model was trained on
+2 nodes x 4 GPUs). Everything is driven by `scripts/sh_train_protein_qwen_staged.sh`.
+
+### 1. Build the GO embeddings
+
+The GO graph encoder is initialised from one Qwen3-Embedding-4B vector per GO term. This
+directory (~43k files, 338 MB) is built once and passed as `--precomputed_embeddings_path`:
+
+```bash
+python -m bioreason2.utils.go_embed \
+    --output_dir /data/bioreason/go_embeddings \
+    --dataset_cache_dir /data/bioreason/data \
+    --batch_size 32 --device cuda
+```
+
+### 2. (Optional) Download protein structures
+
+ESM3 uses backbone coordinates when they are available and falls back to sequence-only when
+they are not. The released model was trained with structures; skipping them is supported but
+will not reproduce it exactly. ~19 GB of tarballs expand to ~200 GB.
+
+```bash
+python data/structures/download_structures.py \
+    --cache-dir /data/bioreason/data \
+    --structure-dir /data/bioreason/structures \
+    --repo-id wanglab/cafa5 --repo-type dataset --shard-subdirs af_shards \
+    --download-af True --download-interlabel True \
+    --download-swissprot False --download-temp-holdout False
+```
+
+### 3. Configure and launch
+
+Edit the `Paths` block at the top of `scripts/sh_train_protein_qwen_staged.sh`
+(`BASE_CHECKPOINT_DIR`, `DATASET_CACHE_DIR`, `CACHE_DIR`, `GO_EMBEDDINGS_PATH`, and
+optionally `STRUCTURE_DIR`), set `NUM_NODES` / `BATCH_SIZE` to match your cluster, uncomment
+the `#SBATCH` header, then:
+
+```bash
+sbatch scripts/sh_train_protein_qwen_staged.sh     # or: bash scripts/sh_train_protein_qwen_staged.sh
+```
+
+The script validates every path before launching and exits with an explanation if one is
+unset or missing. The training data (`wanglab/bioreason-pro-sft-reasoning-data`, 117,002 train /
+7,365 validation) is pulled from HuggingFace automatically.
+
+Set `WANDB_ENTITY` to log to your own Weights & Biases entity; leave it empty to use your
+default.
+
+### Training stages
+
+`--training_stage 1` trains only the protein projector and GO encoder with the LLM frozen;
+`--training_stage 2` fine-tunes the whole stack with LoRA. **The released checkpoint was
+produced by Stage 2 alone**, starting from randomly-initialised projectors, which is what the
+script does by default. To run the warm-up first and initialise Stage 2 from its weights:
+
+```bash
+RUN_STAGE1=true sbatch scripts/sh_train_protein_qwen_staged.sh
+```
+
+### Key hyperparameters
+
+| Setting | Value |
+|---|---|
+| Base LLM | `Qwen/Qwen3-4B-Thinking-2507` |
+| Protein encoder | `esm3_sm_open_v1`, layer 37, frozen |
+| GO encoder | 3 GAT layers, hidden 512, 8 heads, 200 reduced embeddings, dim 2560 |
+| LoRA | r=128, alpha=256, dropout=0 |
+| Optimiser | lr 1e-4, weight decay 0.01, warmup 5%, 10 epochs |
+| Sequence lengths | text 10000, protein 2000 |
+
+### Evaluation
+
+`scripts/sh_eval.sh` runs a checkpoint over the released test set
+(`wanglab/bioreason-pro-test-data`, 8,630 proteins) and writes one JSON per protein. Score
+those with CAFA Fmax / IA-weighted Fmax:
+
+```bash
+bash evals/run_cafa_eval.sh <evals_path> [output_dir]
+```
+
+Note: the GO encoder architecture flags at evaluation time must match training exactly
+(`512 / 3 / 8 / 200 / 2560`, `--unified_go_encoder True`, `--protein_embedding_layer 37`), or
+the projector will load mismatched weights.
+
+<br>
+
 ## Key Contributions
 
 • **First multimodal reasoning LLM for protein function**: BioReason-Pro deeply integrates ESM3 protein embeddings, a GO graph encoder, and biological context within a unified LLM to generate structured reasoning traces and functional annotations.

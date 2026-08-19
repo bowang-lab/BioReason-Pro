@@ -19,7 +19,8 @@
 set -eo pipefail
 
 # Run from project root
-cd "$(dirname "$0")/.."
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 # ===================================================================================================
 # Environment Setup
@@ -55,7 +56,7 @@ MODEL_PATH="/path/to/bioreason-pro-rl"
 # Paths: Set these to your local directories
 # ===================================================================================================
 PROTEIN_MODEL_NAME="esm3_sm_open_v1"
-GO_OBO_PATH=""                      # e.g., /path/to/go-basic.obo
+GO_OBO_PATH="$REPO_ROOT/bioreason2/dataset/go-basic.obo"
 GO_EMBEDDINGS_PATH=""               # e.g., /data/bioreason/go_embeddings
 DATASET_CACHE_DIR=""                # e.g., /data/bioreason/data
 STRUCTURE_DIR=""                    # e.g., /data/bioreason/structures
@@ -66,6 +67,20 @@ EVALS_PATH="$EVALS_DIR/results"
 # Chunking parameters (can be overridden via command line)
 NUM_CHUNKS=${NUM_CHUNKS:-1}
 CHUNK_ID=${CHUNK_ID:-0}
+
+# ===================================================================================================
+# Preflight
+# ===================================================================================================
+for v in GO_OBO_PATH GO_EMBEDDINGS_PATH DATASET_CACHE_DIR; do
+  if [ -z "${!v}" ]; then
+    echo "Error: $v is not set. Edit the 'Paths' block at the top of this script." >&2
+    exit 1
+  fi
+done
+if [ ! -f "$GO_OBO_PATH" ]; then
+  echo "Error: GO_OBO_PATH does not exist: $GO_OBO_PATH" >&2
+  exit 1
+fi
 
 # ===================================================================================================
 # Evaluation Parameters
@@ -88,8 +103,11 @@ GO_NUM_REDUCED_EMBEDDINGS=200
 GO_EMBEDDING_DIM=2560
 
 # Dataset configuration
-DATASET_NAME="interlabel_test_dataset_with_gogpt_memorized_copy"
-REASONING_DATASET_NAME="interlabel_test_dataset_with_gogpt_memorized_copy"
+# Released test set: its own HF repo, single "default" config with only a `test`
+# split (load_cafa5_dataset falls back to it for validation).
+HF_DATASET_REPO="wanglab/bioreason-pro-test-data"
+DATASET_NAME="default"
+REASONING_DATASET_NAME="default"
 SPLIT_GO_ASPECTS=False
 INTERPRO_IN_PROMPT=True
 PREDICT_INTERPRO=False
@@ -131,7 +149,7 @@ python "$EVAL_SCRIPT" \
     --go_num_heads $GO_NUM_HEADS \
     --go_num_reduced_embeddings $GO_NUM_REDUCED_EMBEDDINGS \
     --go_embedding_dim $GO_EMBEDDING_DIM \
-    --cafa5_dataset "wanglab/cafa5" \
+    --cafa5_dataset "$HF_DATASET_REPO" \
     --cafa5_dataset_name "$DATASET_NAME" \
     --reasoning_dataset_name "$REASONING_DATASET_NAME" \
     --go_gpt_predictions_column "$GO_GPT_PREDICTIONS_COLUMN" \

@@ -442,7 +442,14 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         "--structure_dir", type=str, default=None
     )
     dataset_group.add_argument("--include_go_defs", type=str2bool, default=False)
-    dataset_group.add_argument("--interpro_dataset_name", type=str, default="interpro_metadata")
+    dataset_group.add_argument(
+        "--interpro_dataset_name",
+        type=str,
+        default=None,
+        help="Name of InterPro metadata dataset config, resolved against --cafa5_dataset. "
+             "Not needed on the reasoning path, which reads the dataset's own "
+             "`interpro_formatted` column.",
+    )
     dataset_group.add_argument("--split_go_aspects", type=str2bool, default=True)
     dataset_group.add_argument("--interpro_in_prompt", type=str2bool, default=True)
     dataset_group.add_argument("--predict_interpro", type=str2bool, default=False)
