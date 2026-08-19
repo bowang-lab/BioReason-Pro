@@ -41,6 +41,14 @@ TSV_COLS = [
 
 IPRSCAN_API_URL = "https://www.ebi.ac.uk/Tools/services/rest/iprscan5"
 
+# Network defaults. requests has NO timeout by default, so a hung connection blocks
+# forever; and the EBI queue can leave a job pending indefinitely.
+REQUEST_TIMEOUT = 60      # seconds per HTTP request
+POLL_TIMEOUT = 1800       # seconds to wait for one InterProScan job.
+                          # Observed EBI queue times vary hugely: 94s and 633s for two
+                          # proteins submitted together. Generous on purpose -- a timeout
+                          # that fires on a merely-slow job is worse than waiting.
+
 # Global cache for IPR type lookup
 _IPR_TYPE_CACHE: dict[str, str] = {}
 
@@ -75,16 +83,26 @@ def load_interpro_metadata(metadata_path: str) -> dict[str, str]:
     return _IPR_TYPE_CACHE
 
 
-def run_interproscan_online(sequence: str, email: str = "anonymous@example.com") -> pd.DataFrame:
+def run_interproscan_online(
+    sequence: str,
+    email: str = "anonymous@example.com",
+    request_timeout: int = REQUEST_TIMEOUT,
+    poll_timeout: int = POLL_TIMEOUT,
+) -> pd.DataFrame:
     """
     Run InterProScan via the EBI REST API.
-    
+
     Args:
         sequence: Protein sequence string.
         email: Email for job submission (required by EBI).
-        
+        request_timeout: Per-HTTP-request timeout in seconds.
+        poll_timeout: Give up waiting for the EBI job after this many seconds.
+
     Returns:
         DataFrame with domain annotations.
+
+    Raises:
+        TimeoutError: if the EBI job does not finish within poll_timeout.
     """
     # Submit job
     submit_url = f"{IPRSCAN_API_URL}/run"
@@ -94,27 +112,38 @@ def run_interproscan_online(sequence: str, email: str = "anonymous@example.com")
         "stype": "p",  # protein
     }
     
-    resp = requests.post(submit_url, data=data)
+    resp = requests.post(submit_url, data=data, timeout=request_timeout)
     resp.raise_for_status()
     job_id = resp.text.strip()
     
-    # Poll for completion
+    # Poll for completion.
+    # EBI returns RUNNING / QUEUED / FINISHED / ERROR / FAILURE / NOT_FOUND. Anything
+    # other than a terminal state means keep waiting, but bounded: without a deadline a
+    # wedged or endlessly-queued job hangs the caller forever with no output.
     status_url = f"{IPRSCAN_API_URL}/status/{job_id}"
-    while True:
-        resp = requests.get(status_url)
+    deadline = time.time() + poll_timeout
+    status = "UNKNOWN"
+    while time.time() < deadline:
+        resp = requests.get(status_url, timeout=request_timeout)
         resp.raise_for_status()
         status = resp.text.strip()
-        
+
         if status == "FINISHED":
             break
-        elif status in ("FAILURE", "ERROR"):
-            raise RuntimeError(f"Job failed with status: {status}")
-        
+        if status in ("FAILURE", "ERROR", "NOT_FOUND"):
+            raise RuntimeError(f"InterProScan job {job_id} failed with status: {status}")
+
         time.sleep(5)
-    
+    else:
+        raise TimeoutError(
+            f"InterProScan job {job_id} still {status} after {poll_timeout}s. "
+            f"The EBI queue can be slow; retry later, raise poll_timeout, or run "
+            f"InterProScan locally."
+        )
+
     # Get TSV results
     result_url = f"{IPRSCAN_API_URL}/result/{job_id}/tsv"
-    resp = requests.get(result_url)
+    resp = requests.get(result_url, timeout=request_timeout)
     resp.raise_for_status()
     
     # Parse TSV from response text
