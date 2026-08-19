@@ -35,7 +35,22 @@ The full catalogue is also available for download as a HuggingFace dataset: [wan
 
 ## Datasets
 
-The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins across 3,135 organisms curated from UniProt with experimental GO annotations, InterPro domains, STRING protein-protein interactions, and PDB structures. Temporal holdout follows the CAFA framework. Detailed download and usage instructions are available on our [HuggingFace collection](https://huggingface.co/collections/wanglab/bioreason-pro).
+The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins across 3,135 organisms curated from UniProt with experimental GO annotations, InterPro domains, STRING protein-protein interactions, and PDB structures. Temporal holdout follows the CAFA framework. Everything is on our [HuggingFace collection](https://huggingface.co/collections/wanglab/bioreason-pro):
+
+| Dataset | Contents | Size |
+|---------|----------|------|
+| [bioreason-pro-sft-reasoning-data](https://huggingface.co/datasets/wanglab/bioreason-pro-sft-reasoning-data) | SFT training set: 117,002 train / 7,365 validation proteins with GPT-5 reasoning traces, GO terms, InterPro domains, STRING PPIs | 632 MB |
+| [bioreason-pro-test-data](https://huggingface.co/datasets/wanglab/bioreason-pro-test-data) | Held-out test set, 8,630 proteins | 47 MB |
+| [bioreason-pro-structures](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | AlphaFold backbone structures covering all 131,838 referenced proteins | ~34 GB |
+| [bioreason-pro-go-embeddings](https://huggingface.co/datasets/wanglab/bioreason-pro-go-embeddings) | Qwen3-Embedding-4B vectors for 43,248 GO terms, used to initialise the GO graph encoder | 177 MB |
+| [protein_catalogue](https://huggingface.co/datasets/wanglab/protein_catalogue) | Precomputed predictions for 223,000+ proteins | — |
+
+The training and test sets load directly through `datasets`. Structures and GO embeddings are
+fetched with [`scripts/download_assets.py`](scripts/download_assets.py) — see [Training](#training).
+
+**Note on coverage:** the SFT set is 124,367 of the 133,492 curated proteins. The remaining
+9,125 were excluded because they lack InterPro annotations (6,574) or a usable reasoning
+trace, and so have no supervision target.
 
 <br>
 
@@ -54,23 +69,53 @@ Model weights are available on our [HuggingFace collection](https://huggingface.
 ## Installation
 
 ### Prerequisites
-- Python 3.11+
-- CUDA/GPU for best performance
 
-### Installation Steps
+| | |
+|---|---|
+| Python | 3.11+ |
+| GPU | Required. Inference needs ~1x A100 80GB; training was done on 2 nodes x 4 GPUs. |
+| CUDA | 12.x (torch is pinned to `>=2.6,<2.8`) |
+| Disk | ~10 GB for models, plus ~150 GB if you download structures for training |
+
+Training additionally requires a **CUDA GPU at import time** — `train_protein_llm.py` imports
+Unsloth unconditionally, which raises on a CPU-only machine. Inference (`predict.py`, `eval.py`)
+does not import Unsloth.
+
+### 1. Install
+
 ```bash
-# Clone the repository
 git clone https://github.com/bowang-lab/BioReason-Pro.git
 cd BioReason-Pro
 
-# Install ESM (must use --no-deps due to transformers version conflict with vllm)
+# ESM must be installed with --no-deps: it pins a transformers version that conflicts with vllm
 pip install esm --no-deps
 
-# Install package (pulls torch, vllm, transformers, and all other dependencies)
+# Everything else (torch, vllm, transformers, unsloth, lightning, ...)
 pip install -e .
 
-# Install flash-attn last (requires torch to be already installed, must build from source)
+# flash-attn last: it builds against the already-installed torch
 pip install flash-attn --no-build-isolation --no-cache-dir
+```
+
+Order matters. Installing `esm` without `--no-deps`, or `flash-attn` before torch, will fail.
+
+### 2. Authenticate with HuggingFace
+
+The protein encoder `esm3_sm_open_v1` is a **gated** model. You must accept its licence once
+at [EvolutionaryScale/esm3-sm-open-v1](https://huggingface.co/EvolutionaryScale/esm3-sm-open-v1),
+then log in — otherwise model loading fails with a 401 and no other explanation:
+
+```bash
+hf auth login          # or: export HF_TOKEN=hf_...
+```
+
+The datasets, checkpoints, structures, and GO embeddings are all public and need no
+special access.
+
+### 3. Check it worked
+
+```bash
+python -c "import torch, unsloth, esm, vllm; print('ok', torch.cuda.is_available())"
 ```
 
 <br>
@@ -155,53 +200,95 @@ Organism names must match the format in `organism_list.txt` exactly. Unsupported
 
 ## Training
 
-Reproducing the SFT checkpoint requires a multi-GPU node (the released model was trained on
-2 nodes x 4 GPUs). Everything is driven by `scripts/sh_train_protein_qwen_staged.sh`.
+Supervised fine-tuning, end to end, after [Installation](#installation):
 
-### 1. Build the GO embeddings
+```bash
+python scripts/download_assets.py --dest /data/bioreason   # 1. get the data
+$EDITOR scripts/sh_train_protein_qwen_staged.sh            # 2. fill in 4 paths
+sbatch scripts/sh_train_protein_qwen_staged.sh             # 3. train
+```
 
-The GO graph encoder is initialised from one Qwen3-Embedding-4B vector per GO term. This
-directory (~43k files, 338 MB) is built once and passed as `--precomputed_embeddings_path`:
+The released model was trained on 2 nodes x 4 GPUs; a single 80 GB GPU is enough to run the
+pipeline at small batch size. Each step is detailed below.
+
+### 1. Download the assets
+
+Two things training needs are too large for git and live on the Hub. One command fetches
+both and lays them out exactly as the scripts expect:
+
+```bash
+python scripts/download_assets.py --dest /data/bioreason
+
+# -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  177 MB down, 338 MB on disk
+# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down, ~150 GB on disk
+```
+
+| Asset | Repo | Required? |
+|---|---|---|
+| GO term embeddings | [`wanglab/bioreason-pro-go-embeddings`](https://huggingface.co/datasets/wanglab/bioreason-pro-go-embeddings) | **Yes** — the GO graph encoder is initialised from them |
+| Protein structures | [`wanglab/bioreason-pro-structures`](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | Optional, but the released checkpoint used them |
+
+The download is resumable — re-run it if interrupted. To fetch only the required asset, add
+`--skip-structures`; training then runs sequence-only and will not reproduce the released
+checkpoint.
+
+All ~370k structures in the shards are extracted, so the local copy is a complete mirror of
+the published set. Only ~123k are referenced by the released datasets — pass
+`--referenced-only` if you would rather save ~90 GB of disk.
+
+Verify at any time:
+
+```bash
+python scripts/download_assets.py --dest /data/bioreason --verify
+```
+
+> **Why verify matters.** Missing structure files are handled *silently*: the collate
+> function substitutes empty coordinates, so a wrong `STRUCTURE_DIR` degrades the model to
+> sequence-only without raising anything. Training prints a loud warning when fewer than 90%
+> of sampled structures resolve, and `--verify` checks coverage against the released
+> datasets directly.
+
+The GO embeddings can also be rebuilt from scratch instead of downloaded, though downloading
+is preferred — a different model revision yields different vectors:
 
 ```bash
 python -m bioreason2.utils.go_embed \
-    --output_dir /data/bioreason/go_embeddings \
-    --dataset_cache_dir /data/bioreason/data \
-    --batch_size 32 --device cuda
+    --output_dir /data/bioreason/go_embeddings --batch_size 32 --device cuda
 ```
 
-### 2. (Optional) Download protein structures
+### 2. Edit one file
 
-ESM3 uses backbone coordinates when they are available and falls back to sequence-only when
-they are not. The released model was trained with structures; skipping them is supported but
-will not reproduce it exactly. ~19 GB of tarballs expand to ~200 GB.
+Everything is driven by **`scripts/sh_train_protein_qwen_staged.sh`**. It is the only file you
+need to change. Open it and fill in the `Paths` block near the top:
+
+| Variable | Set it to | Required |
+|---|---|---|
+| `BASE_CHECKPOINT_DIR` | where checkpoints are written, e.g. `/data/bioreason/checkpoints` | **yes** |
+| `DATASET_CACHE_DIR` | HuggingFace dataset cache, e.g. `/data/bioreason/data` | **yes** |
+| `CACHE_DIR` | HuggingFace model cache, e.g. `/data/bioreason/cache` | **yes** |
+| `GO_EMBEDDINGS_PATH` | the `go_embeddings` dir from step 1 | **yes** |
+| `STRUCTURE_DIR` | the `structures` dir from step 1 | no — empty runs sequence-only |
+| `GO_OBO_PATH` | already defaults to the ontology shipped in this repo | no |
+| `NUM_NODES` / `BATCH_SIZE` | match your cluster (defaults: 2 nodes, batch 4/GPU) | yes if not 2 nodes |
+| `WANDB_ENTITY` | your W&B entity, or leave empty | no |
+
+Then uncomment the `#SBATCH` header at the top and adjust it for your scheduler.
+
+### 3. Launch
 
 ```bash
-python data/structures/download_structures.py \
-    --cache-dir /data/bioreason/data \
-    --structure-dir /data/bioreason/structures \
-    --repo-id wanglab/cafa5 --repo-type dataset --shard-subdirs af_shards \
-    --download-af True --download-interlabel True \
-    --download-swissprot False --download-temp-holdout False
+sbatch scripts/sh_train_protein_qwen_staged.sh
+# or, on a single machine:
+bash scripts/sh_train_protein_qwen_staged.sh
 ```
 
-### 3. Configure and launch
+The script preflights every path and exits immediately with an explanation if one is unset or
+missing, rather than failing an hour into model loading. Training data
+(`wanglab/bioreason-pro-sft-reasoning-data`, 117,002 train / 7,365 validation) is pulled from
+HuggingFace automatically.
 
-Edit the `Paths` block at the top of `scripts/sh_train_protein_qwen_staged.sh`
-(`BASE_CHECKPOINT_DIR`, `DATASET_CACHE_DIR`, `CACHE_DIR`, `GO_EMBEDDINGS_PATH`, and
-optionally `STRUCTURE_DIR`), set `NUM_NODES` / `BATCH_SIZE` to match your cluster, uncomment
-the `#SBATCH` header, then:
-
-```bash
-sbatch scripts/sh_train_protein_qwen_staged.sh     # or: bash scripts/sh_train_protein_qwen_staged.sh
-```
-
-The script validates every path before launching and exits with an explanation if one is
-unset or missing. The training data (`wanglab/bioreason-pro-sft-reasoning-data`, 117,002 train /
-7,365 validation) is pulled from HuggingFace automatically.
-
-Set `WANDB_ENTITY` to log to your own Weights & Biases entity; leave it empty to use your
-default.
+To sanity-check the whole path on a 50-sample slice before committing a long run, set
+`--debug True` in the script's `BASE_COMMAND`. That takes about ten minutes on one H100.
 
 ### Training stages
 
@@ -227,17 +314,41 @@ RUN_STAGE1=true sbatch scripts/sh_train_protein_qwen_staged.sh
 
 ### Evaluation
 
-`scripts/sh_eval.sh` runs a checkpoint over the released test set
-(`wanglab/bioreason-pro-test-data`, 8,630 proteins) and writes one JSON per protein. Score
-those with CAFA Fmax / IA-weighted Fmax:
+Evaluation is two steps: generate predictions, then score them.
+
+**1. Generate.** Edit the `Paths` block of `scripts/sh_eval.sh` (`GO_EMBEDDINGS_PATH`,
+`DATASET_CACHE_DIR`, `STRUCTURE_DIR`, and `MODEL_PATH` — either your own checkpoint or a
+released one) and run it. It writes one JSON per protein into `EVALS_PATH`, and is resumable:
+re-running skips proteins that already have a result.
+
+```bash
+bash scripts/sh_eval.sh
+```
+
+**2. Score.** CAFA Fmax and IA-weighted Fmax over that directory:
 
 ```bash
 bash evals/run_cafa_eval.sh <evals_path> [output_dir]
 ```
 
-Note: the GO encoder architecture flags at evaluation time must match training exactly
-(`512 / 3 / 8 / 200 / 2560`, `--unified_go_encoder True`, `--protein_embedding_layer 37`), or
-the projector will load mismatched weights.
+To score a released checkpoint without training anything, point `MODEL_PATH` at a snapshot of
+[`wanglab/bioreason-pro-sft`](https://huggingface.co/wanglab/bioreason-pro-sft) or
+[`wanglab/bioreason-pro-rl`](https://huggingface.co/wanglab/bioreason-pro-rl).
+
+**A note on PPI.** Training includes STRING interaction partners in the prompt
+(`PPI_IN_PROMPT=True`), but the released test set has no `ppi_formatted` column, so
+evaluation runs without them and `scripts/sh_eval.sh` sets `PPI_IN_PROMPT=False`
+accordingly. This asymmetry is inherent to the released data, not a misconfiguration —
+but it does mean the evaluation prompt differs from the training prompt.
+
+> **Two things that will silently give you wrong numbers.**
+> The GO encoder flags at evaluation must match training exactly
+> (`512 / 3 / 8 / 200 / 2560`, `--unified_go_encoder True`, `--protein_embedding_layer 37`) or
+> the projector loads mismatched weights.
+> And `--max_new_tokens` must be large enough for the model to finish reasoning and emit its
+> GO summary — the default of 5000 is sized for this. Truncating the generation produces
+> parseable-but-empty predictions and an Fmax near zero, which looks like a bad model rather
+> than a bad setting.
 
 <br>
 
