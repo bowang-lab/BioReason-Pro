@@ -3,12 +3,12 @@
 Download the two large assets BioReason-Pro training and evaluation need but that
 are not part of the git repository:
 
-  * protein structures   -> wanglab/bioreason-pro-structures   (~34 GB download, ~57 GB on disk)
+  * protein structures   -> wanglab/bioreason-pro-structures   (~34 GB download, ~150 GB on disk)
   * GO term embeddings   -> wanglab/bioreason-pro-go-embeddings (177 MB download, 338 MB on disk)
 
-By default only the ~132k structures the released datasets actually reference are
-written to disk; the shards themselves hold ~370k. Pass --all-structures to keep
-everything (~150 GB).
+All ~370k structures in the shards are extracted by default so the local mirror is
+complete. Only ~123k are referenced by the released datasets, so pass
+--referenced-only if you would rather save ~90 GB of disk.
 
 Both land as plain directories that you point the training scripts at:
 
@@ -59,9 +59,9 @@ def _extract_shard(tar_path: str, dest_dir: str, keep: set = None) -> int:
     wrong is silent: collate.py checks os.path.exists() and falls back to empty
     coordinates without warning, so every structure would be ignored.
 
-    `keep` restricts extraction to the filenames the datasets actually reference.
-    The shards hold ~370k structures but only ~132k are referenced, so filtering
-    saves roughly 90 GB of disk.
+    `keep`, when given, restricts extraction to the filenames the datasets actually
+    reference (~123k of the ~370k shipped). Default is None: extract everything, so
+    the local mirror is a complete copy of the published structures.
     """
     written = 0
     with tarfile.open(tar_path, "r:gz") as tar:
@@ -105,12 +105,12 @@ def _shard_marker(dest_dir: str, shard: str) -> str:
 
 
 def download_structures(dest_dir: str, num_workers: int, keep_archives: bool,
-                        all_structures: bool = False) -> None:
+                        referenced_only: bool = False) -> None:
     os.makedirs(dest_dir, exist_ok=True)
     os.makedirs(os.path.join(dest_dir, ".shards"), exist_ok=True)
 
     keep = None
-    if not all_structures:
+    if referenced_only:
         print("structures: resolving which files the datasets reference …")
         try:
             keep = _referenced_structure_names()
@@ -244,9 +244,9 @@ def main() -> int:
                     help="Parallel shard downloads")
     ap.add_argument("--keep-archives", action="store_true",
                     help="Keep the downloaded .tar.gz shards instead of deleting them")
-    ap.add_argument("--all-structures", action="store_true",
-                    help="Extract every structure in the shards (~370k files, ~150 GB) "
-                         "instead of only the ~132k the released datasets reference (~57 GB)")
+    ap.add_argument("--referenced-only", action="store_true",
+                    help="Extract only the ~123k structures the released datasets reference "
+                         "(~57 GB) instead of all ~370k in the shards (~150 GB, the default)")
     ap.add_argument("--verify", action="store_true",
                     help="Only verify existing downloads against the released datasets")
     args = ap.parse_args()
@@ -261,7 +261,7 @@ def main() -> int:
         download_go_embeddings(go_dir)
     if not args.skip_structures:
         download_structures(structures_dir, args.num_workers, args.keep_archives,
-                            args.all_structures)
+                            args.referenced_only)
 
     print("\nVerifying …")
     problems = verify(structures_dir, go_dir)

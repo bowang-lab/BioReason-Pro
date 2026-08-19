@@ -182,7 +182,7 @@ both and lays them out exactly as the scripts expect:
 python scripts/download_assets.py --dest /data/bioreason
 
 # -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  ~250 MB down, 338 MB on disk
-# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down,  ~57 GB on disk
+# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down, ~150 GB on disk
 ```
 
 | Asset | Repo | Required? |
@@ -194,9 +194,9 @@ The download is resumable — re-run it if interrupted. To fetch only the requir
 `--skip-structures`; training then runs sequence-only and will not reproduce the released
 checkpoint.
 
-By default only the ~123k structures the released datasets actually reference are written to
-disk. The shards hold ~370k, so this saves roughly 90 GB; pass `--all-structures` to keep
-everything.
+All ~370k structures in the shards are extracted, so the local copy is a complete mirror of
+the published set. Only ~123k are referenced by the released datasets — pass
+`--referenced-only` if you would rather save ~90 GB of disk.
 
 Verify at any time:
 
