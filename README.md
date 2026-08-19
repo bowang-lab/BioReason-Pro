@@ -167,6 +167,9 @@ A tab-separated file with the same columns as the input plus additional results:
 The pipeline runs three sequential stages on a single GPU:
 
 1. **InterPro** (CPU/network) — Queries the EBI InterProScan online API to annotate protein domains. Runs in parallel using all available CPU threads.
+   **This stage dominates wall-clock time and is highly variable**: measured 94 s and 633 s for
+   two proteins submitted together, depending on EBI queue load. A run that appears stuck here
+   is usually just waiting. Each job gives up after 30 minutes rather than hanging forever.
 2. **GO-GPT** (GPU) — Loads the GO-GPT model to predict Gene Ontology terms. Unloads from GPU after completion.
 3. **BioReason-Pro** (GPU) — Downloads the selected model checkpoint from HuggingFace, loads it, and generates functional annotations in batches.
 
