@@ -158,34 +158,48 @@ Organism names must match the format in `organism_list.txt` exactly. Unsupported
 Reproducing the SFT checkpoint requires a multi-GPU node (the released model was trained on
 2 nodes x 4 GPUs). Everything is driven by `scripts/sh_train_protein_qwen_staged.sh`.
 
-### 1. Build the GO embeddings
+### 1. Download the assets
 
-The GO graph encoder is initialised from one Qwen3-Embedding-4B vector per GO term. This
-directory (~43k files, 338 MB) is built once and passed as `--precomputed_embeddings_path`:
+Two things training needs are too large for git and live on the Hub. One command fetches
+both and lays them out exactly as the scripts expect:
+
+```bash
+python scripts/download_assets.py --dest /data/bioreason
+
+# -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  ~250 MB down, 338 MB on disk
+# -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down,  ~60 GB on disk
+```
+
+| Asset | Repo | Required? |
+|---|---|---|
+| GO term embeddings | [`wanglab/bioreason-pro-go-embeddings`](https://huggingface.co/datasets/wanglab/bioreason-pro-go-embeddings) | **Yes** — the GO graph encoder is initialised from them |
+| Protein structures | [`wanglab/bioreason-pro-structures`](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | Optional, but the released checkpoint used them |
+
+The download is resumable — re-run it if interrupted. To fetch only the required asset, add
+`--skip-structures`; training then runs sequence-only and will not reproduce the released
+checkpoint.
+
+Verify at any time:
+
+```bash
+python scripts/download_assets.py --dest /data/bioreason --verify
+```
+
+> **Why verify matters.** Missing structure files are handled *silently*: the collate
+> function substitutes empty coordinates, so a wrong `STRUCTURE_DIR` degrades the model to
+> sequence-only without raising anything. Training prints a loud warning when fewer than 90%
+> of sampled structures resolve, and `--verify` checks coverage against the released
+> datasets directly.
+
+The GO embeddings can also be rebuilt from scratch instead of downloaded, though downloading
+is preferred — a different model revision yields different vectors:
 
 ```bash
 python -m bioreason2.utils.go_embed \
-    --output_dir /data/bioreason/go_embeddings \
-    --dataset_cache_dir /data/bioreason/data \
-    --batch_size 32 --device cuda
+    --output_dir /data/bioreason/go_embeddings --batch_size 32 --device cuda
 ```
 
-### 2. (Optional) Download protein structures
-
-ESM3 uses backbone coordinates when they are available and falls back to sequence-only when
-they are not. The released model was trained with structures; skipping them is supported but
-will not reproduce it exactly. ~19 GB of tarballs expand to ~200 GB.
-
-```bash
-python data/structures/download_structures.py \
-    --cache-dir /data/bioreason/data \
-    --structure-dir /data/bioreason/structures \
-    --repo-id wanglab/cafa5 --repo-type dataset --shard-subdirs af_shards \
-    --download-af True --download-interlabel True \
-    --download-swissprot False --download-temp-holdout False
-```
-
-### 3. Configure and launch
+### 2. Configure and launch
 
 Edit the `Paths` block at the top of `scripts/sh_train_protein_qwen_staged.sh`
 (`BASE_CHECKPOINT_DIR`, `DATASET_CACHE_DIR`, `CACHE_DIR`, `GO_EMBEDDINGS_PATH`, and

@@ -133,6 +133,37 @@ def _filter_go_terms_by_frequency(
     return filtered_dataset
 
 
+def _warn_if_structures_unresolved(dataset, structure_dir, sample=512):
+    """Warn loudly when structure_dir is set but the files are not actually there.
+
+    Missing structures are handled silently downstream: collate.py falls back to
+    empty coordinates, so a wrong structure_dir (or shards extracted without
+    gunzipping, leaving .cif.gz names) degrades the model to sequence-only with
+    no error anywhere. Surface it here instead.
+    """
+    try:
+        paths = [p for p in dataset["structure_path"][:sample] if p]
+    except Exception:
+        return
+    if not paths:
+        return
+    found = sum(1 for p in paths if os.path.exists(p))
+    pct = 100.0 * found / len(paths)
+    if pct < 90.0:
+        print(
+            "\n" + "!" * 78 +
+            f"\n! WARNING: only {found}/{len(paths)} ({pct:.1f}%) sampled structure files exist"
+            f"\n!          under structure_dir={structure_dir}"
+            "\n!          Missing structures are SILENTLY ignored (empty coordinates),"
+            "\n!          so training will run sequence-only and the model will differ"
+            "\n!          from the released checkpoint."
+            "\n!          Fix with:  python scripts/download_assets.py --verify"
+            "\n" + "!" * 78 + "\n"
+        )
+    else:
+        print(f"Structure files resolve: {found}/{len(paths)} sampled ({pct:.1f}%)")
+
+
 def _add_structure_prefix(example, structure_dir):
     """Helper function to add structure directory prefix to structure paths."""
     if example["structure_path"] is not None:
@@ -527,6 +558,7 @@ def _process_dataset_split(
             num_proc=num_proc,
             desc="Adding structure paths",
         )
+        _warn_if_structures_unresolved(dataset, structure_dir)
 
     return dataset
 
