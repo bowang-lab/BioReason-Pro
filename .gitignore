@@ -193,6 +193,9 @@ cython_debug/
 *.arrow
 *cache*
 *.txt
+!organism_list.txt
+# information-accretion weights, required for weighted Fmax
+!data/IA.txt
 *.out
 *.err
 trainer_output/

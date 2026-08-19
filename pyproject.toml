@@ -27,6 +27,10 @@ dependencies = [
     "vllm>=0.9.0",
     "bitsandbytes",
     "deepspeed",
+    # Training only. Imported unconditionally by train_protein_llm.py and
+    # bioreason2/models/protein_llm.py; requires a CUDA GPU at import time.
+    "unsloth",
+    "unsloth_zoo",
     # esm>=3.2.1 must be installed separately: pip install esm --no-deps (conflicts with vllm on transformers version)
     "goatools",
     "cafaeval",

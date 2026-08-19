@@ -17,7 +17,8 @@
 
 
 # Run from project root
-cd "$(dirname "$0")/.."
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 # ===================================================================================================
 # Environment Setup
@@ -39,22 +40,31 @@ unset SLURM_TRES_PER_TASK
 # Shared Configuration
 # ===================================================================================================
 BASE_WANDB_PROJECT="bioreason-pro-finetune"
+WANDB_ENTITY="${WANDB_ENTITY:-}"    # your W&B entity, or leave empty to use the default
 TEXT_MODEL_NAME="Qwen/Qwen3-4B-Thinking-2507"
 EXPERIMENT_NAME="reasoning-sft"
+
+# --- Cluster topology (must match the SBATCH header above) ---
+NUM_NODES=2
+BATCH_SIZE=4
 
 # --- Paths: Set these to your local directories ---
 BASE_CHECKPOINT_DIR=""              # e.g., /data/checkpoints
 DATASET_CACHE_DIR=""                # e.g., /data/bioreason/data
 CACHE_DIR=""                        # e.g., /data/bioreason/cache
-STRUCTURE_DIR=""                    # e.g., /data/bioreason/structures
-GO_EMBEDDINGS_PATH=""               # e.g., /data/bioreason/go_embeddings
-GO_OBO_PATH=""                      # e.g., /path/to/go-basic.obo
+STRUCTURE_DIR=""                    # e.g., /data/bioreason/structures  (optional, see README)
+GO_EMBEDDINGS_PATH=""               # e.g., /data/bioreason/go_embeddings  (build with bioreason2/utils/go_embed.py)
+GO_OBO_PATH="$REPO_ROOT/bioreason2/dataset/go-basic.obo"
 
 # --- Dataset Configuration ---
-STAGE1_DATASET_NAME="bioreason-pro-sft-reasoning-data"
-STAGE2_DATASET_NAME="bioreason-pro-sft-reasoning-data"
+# The SFT corpus is its own HuggingFace repo with a single "default" config.
+# HF_DATASET_REPO is passed to --cafa5_dataset and REASONING_DATASET_NAME to
+# --reasoning_dataset_name, so these two must be a valid (repo, config) pair.
+HF_DATASET_REPO="wanglab/bioreason-pro-sft-reasoning-data"
+REASONING_DATASET_NAME="default"
+STAGE1_DATASET_NAME="default"
+STAGE2_DATASET_NAME="default"
 STAGE2_DATASET_WEIGHTS="1"
-REASONING_DATASET_NAME="bioreason-pro-sft-reasoning-data"
 GO_GPT_PREDICTIONS_COLUMN="go_pred"
 INCLUDE_GROUND_TRUTH_IN_FINAL_ANSWER=False
 ADD_UNIPROT_SUMMARY=True
@@ -65,7 +75,7 @@ MAX_LENGTH_TEXT=10000
 MAX_LENGTH_PROTEIN=2000
 LORA_RANK=128
 LORA_ALPHA=256
-LORA_DROPOUT=0.05
+LORA_DROPOUT=0          # the released checkpoint was trained with dropout disabled
 ESM_LAYER=37
 
 INTERPRO_IN_PROMPT=True
@@ -75,19 +85,19 @@ PPI_IN_PROMPT=True
 
 BASE_COMMAND="srun python train_protein_llm.py \
     --cache_dir $CACHE_DIR \
-    --wandb_entity adibvafa \
+    ${WANDB_ENTITY:+--wandb_entity $WANDB_ENTITY} \
     --text_model_name ${TEXT_MODEL_NAME} \
     --protein_model_name esm3_sm_open_v1 \
     --strategy ddp_find_unused_parameters_false \
     --use_qlora False \
     --use_unsloth True \
     --num_gpus -1 \
-    --batch_size 4 \
-    --num_nodes 2 \
+    --batch_size $BATCH_SIZE \
+    --num_nodes $NUM_NODES \
     --gradient_accumulation_steps 1 \
     --model_type protein-llm \
     --dataset_type cafa5 \
-    --cafa5_dataset wanglab/cafa5 \
+    --cafa5_dataset $HF_DATASET_REPO \
     --reasoning_dataset_name $REASONING_DATASET_NAME \
     --go_gpt_predictions_column $GO_GPT_PREDICTIONS_COLUMN \
     --include_ground_truth_in_final_answer $INCLUDE_GROUND_TRUTH_IN_FINAL_ANSWER \
@@ -120,7 +130,6 @@ BASE_COMMAND="srun python train_protein_llm.py \
     --seed 23 \
     --save_top_k 1 \
     --include_go_defs False \
-    --interpro_dataset_name interpro_metadata \
     --split_go_aspects False \
     --interpro_in_prompt $INTERPRO_IN_PROMPT \
     --predict_interpro $PREDICT_INTERPRO \
@@ -138,10 +147,43 @@ BASE_COMMAND="srun python train_protein_llm.py \
 # ===================================================================================================
 
 
+# ===================================================================================================
+# Preflight: fail loudly on unset paths instead of creating stray relative dirs
+# ===================================================================================================
+for v in BASE_CHECKPOINT_DIR DATASET_CACHE_DIR CACHE_DIR GO_EMBEDDINGS_PATH GO_OBO_PATH; do
+  if [ -z "${!v}" ]; then
+    echo "Error: $v is not set. Edit the 'Paths' block at the top of this script." >&2
+    exit 1
+  fi
+done
+if [ ! -f "$GO_OBO_PATH" ]; then
+  echo "Error: GO_OBO_PATH does not exist: $GO_OBO_PATH" >&2
+  exit 1
+fi
+if [ ! -d "$GO_EMBEDDINGS_PATH" ] || [ -z "$(ls -A "$GO_EMBEDDINGS_PATH" 2>/dev/null)" ]; then
+  echo "Error: GO_EMBEDDINGS_PATH is empty or missing: $GO_EMBEDDINGS_PATH" >&2
+  echo "       Build it first:  python -m bioreason2.utils.go_embed --output_dir $GO_EMBEDDINGS_PATH" >&2
+  exit 1
+fi
+if [ -n "$STRUCTURE_DIR" ] && [ ! -d "$STRUCTURE_DIR" ]; then
+  echo "Error: STRUCTURE_DIR is set but does not exist: $STRUCTURE_DIR" >&2
+  exit 1
+fi
+# ===================================================================================================
+
+
 
 # ===================================================================================================
 # --- Stage 1: Warm-up (Projector + GO Training) ---
+#
+# OFF by default: the released BioReason-Pro SFT checkpoint was trained with
+# Stage 2 only, starting from randomly-initialised projectors. Set RUN_STAGE1=true
+# to run the warm-up first and initialise Stage 2 from its projector / GO weights.
 # ===================================================================================================
+RUN_STAGE1="${RUN_STAGE1:-false}"
+STAGE1_ARGS=""
+
+if [ "$RUN_STAGE1" = "true" ]; then
 echo "--- Starting Stage 1: Projector Training"
 
 RUN_NAME_S1_DIR="${BASE_WANDB_PROJECT}-$(basename ${TEXT_MODEL_NAME})-stage1"
@@ -177,6 +219,13 @@ fi
 echo "--- Stage 1 Complete. Projector weights saved to $PROJECTOR_WEIGHTS_PATH"
 echo "--- Stage 1 Complete. GO projector weights saved to $GO_PROJECTOR_WEIGHTS_PATH"
 echo "--- Stage 1 Complete. GO encoder weights saved to $GO_ENCODER_WEIGHTS_PATH"
+
+STAGE1_ARGS="--projector_checkpoint_path $PROJECTOR_WEIGHTS_PATH \
+    --go_projection_checkpoint_path $GO_PROJECTOR_WEIGHTS_PATH \
+    --go_encoder_checkpoint_path $GO_ENCODER_WEIGHTS_PATH"
+else
+echo "--- Skipping Stage 1 (RUN_STAGE1=false); Stage 2 starts from scratch"
+fi
 # ===================================================================================================
 
 
@@ -210,9 +259,7 @@ stdbuf -oL -eL $BASE_COMMAND \
     --learning_rate 1e-4 \
     --warmup_ratio 0.05 \
     --text_model_finetune True \
-    --projector_checkpoint_path $PROJECTOR_WEIGHTS_PATH \
-    --go_projection_checkpoint_path $GO_PROJECTOR_WEIGHTS_PATH \
-    --go_encoder_checkpoint_path $GO_ENCODER_WEIGHTS_PATH \
+    $STAGE1_ARGS \
     --checkpoint_dir $STAGE2_CHECKPOINT_DIR \
     --every_n_train_steps 10000000000 \
     --wandb_project "${BASE_WANDB_PROJECT}" \
