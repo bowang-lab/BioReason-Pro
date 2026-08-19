@@ -181,7 +181,7 @@ both and lays them out exactly as the scripts expect:
 ```bash
 python scripts/download_assets.py --dest /data/bioreason
 
-# -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  ~250 MB down, 338 MB on disk
+# -> /data/bioreason/go_embeddings   (GO_EMBEDDINGS_PATH)  177 MB down, 338 MB on disk
 # -> /data/bioreason/structures      (STRUCTURE_DIR)       ~34 GB down, ~150 GB on disk
 ```
 
