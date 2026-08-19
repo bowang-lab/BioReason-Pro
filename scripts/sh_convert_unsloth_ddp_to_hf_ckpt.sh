@@ -8,7 +8,8 @@
 #   If no arguments provided, uses the defaults configured below.
 
 # Run from project root
-cd "$(dirname "$0")/.."
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
 
 # ===================================================================================================
 # Configuration — Set these to match your environment and training run
@@ -26,7 +27,7 @@ PROTEIN_MODEL_NAME="esm3_sm_open_v1"
 
 # Paths — set these to your local directories
 CACHE_DIR=""                        # e.g., /data/bioreason/cache
-GO_OBO_PATH=""                      # e.g., /path/to/go-basic.obo
+GO_OBO_PATH="$REPO_ROOT/bioreason2/dataset/go-basic.obo"
 GO_EMBEDDINGS_PATH=""               # e.g., /data/bioreason/go_embeddings
 
 # Training hyperparameters (must match your SFT training config)
@@ -34,7 +35,7 @@ MAX_LENGTH_TEXT=10000
 MAX_LENGTH_PROTEIN=2000
 LORA_RANK=128
 LORA_ALPHA=256
-LORA_DROPOUT=0.05
+LORA_DROPOUT=0                      # must match SFT training (dropout disabled)
 PROTEIN_EMBEDDING_LAYER=37
 GO_HIDDEN_DIM=512
 GO_NUM_GAT_LAYERS=3
