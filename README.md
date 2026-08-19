@@ -35,7 +35,22 @@ The full catalogue is also available for download as a HuggingFace dataset: [wan
 
 ## Datasets
 
-The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins across 3,135 organisms curated from UniProt with experimental GO annotations, InterPro domains, STRING protein-protein interactions, and PDB structures. Temporal holdout follows the CAFA framework. Detailed download and usage instructions are available on our [HuggingFace collection](https://huggingface.co/collections/wanglab/bioreason-pro).
+The datasets used to train and evaluate BioReason-Pro comprise 133,492 proteins across 3,135 organisms curated from UniProt with experimental GO annotations, InterPro domains, STRING protein-protein interactions, and PDB structures. Temporal holdout follows the CAFA framework. Everything is on our [HuggingFace collection](https://huggingface.co/collections/wanglab/bioreason-pro):
+
+| Dataset | Contents | Size |
+|---------|----------|------|
+| [bioreason-pro-sft-reasoning-data](https://huggingface.co/datasets/wanglab/bioreason-pro-sft-reasoning-data) | SFT training set: 117,002 train / 7,365 validation proteins with GPT-5 reasoning traces, GO terms, InterPro domains, STRING PPIs | 632 MB |
+| [bioreason-pro-test-data](https://huggingface.co/datasets/wanglab/bioreason-pro-test-data) | Held-out test set, 8,630 proteins | 47 MB |
+| [bioreason-pro-structures](https://huggingface.co/datasets/wanglab/bioreason-pro-structures) | AlphaFold backbone structures for all 131,838 referenced proteins | ~34 GB |
+| [bioreason-pro-go-embeddings](https://huggingface.co/datasets/wanglab/bioreason-pro-go-embeddings) | Qwen3-Embedding-4B vectors for 43,248 GO terms, used to initialise the GO graph encoder | 177 MB |
+| [protein_catalogue](https://huggingface.co/datasets/wanglab/protein_catalogue) | Precomputed predictions for 223,000+ proteins | — |
+
+The training and test sets load directly through `datasets`. Structures and GO embeddings are
+fetched with [`scripts/download_assets.py`](scripts/download_assets.py) — see [Training](#training).
+
+**Note on coverage:** the SFT set is 124,367 of the 133,492 curated proteins. The remaining
+9,125 were excluded because they lack InterPro annotations (6,574) or a usable reasoning
+trace, and so have no supervision target.
 
 <br>
 

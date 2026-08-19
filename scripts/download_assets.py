@@ -36,6 +36,11 @@ from tqdm import tqdm
 STRUCTURES_REPO = "wanglab/bioreason-pro-structures"
 GO_EMBEDDINGS_REPO = "wanglab/bioreason-pro-go-embeddings"
 
+# Shard folders required to cover every structure_path in the released datasets.
+# Verified: these three give 131,838/131,838 (100%). Listed explicitly so that
+# adding unrelated shards to the repo later cannot silently inflate the download.
+STRUCTURE_SHARD_PREFIXES = ("af_shards/", "af_shards_extra/", "interlabel_shards/")
+
 
 # ---------------------------------------------------------------------------
 # Extraction
@@ -80,7 +85,7 @@ def download_structures(dest_dir: str, num_workers: int, keep_archives: bool) ->
     api = HfApi()
     shards = sorted(
         f for f in api.list_repo_files(STRUCTURES_REPO, repo_type="dataset")
-        if f.endswith(".tar.gz")
+        if f.endswith(".tar.gz") and f.startswith(STRUCTURE_SHARD_PREFIXES)
     )
     todo = [s for s in shards if not os.path.exists(_shard_marker(dest_dir, s))]
     print(f"structures: {len(shards)} shards total, {len(todo)} to fetch")
