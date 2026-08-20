@@ -984,7 +984,9 @@ def load_cafa5_dataset(
         return train_dataset, val_dataset, test_dataset
 
     except Exception as e:
+        # Returning empty lists here turned a transient HuggingFace read timeout into
+        # a confusing "'list' object has no attribute 'shuffle'" further downstream,
+        # and let callers proceed as though the dataset had loaded. Fail loudly.
         print(f"Failed to load CAFA5 dataset: {e}")
-        print("Returning empty datasets")
         traceback.print_exc()
-        return [], [], []
+        raise
