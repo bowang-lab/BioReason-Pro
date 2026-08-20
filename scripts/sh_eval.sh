@@ -111,11 +111,13 @@ REASONING_DATASET_NAME="default"
 SPLIT_GO_ASPECTS=False
 INTERPRO_IN_PROMPT=True
 PREDICT_INTERPRO=False
-# Must be True to reproduce the published benchmark. It is not really about PPI:
-# ppi_in_prompt=True is the only branch in _format_reasoning_prompt that emits the
-# GO-aspect focus hint and the UniProt-summary instruction. With False the prompt
-# loses both and scores collapse.
+# True reproduces the published benchmark. False now drops only the PPI section.
 PPI_IN_PROMPT=True
+
+# True keeps the prompt independent of the example's labels (matches predict.py).
+# Set both False to reproduce the published benchmark numbers.
+ASK_ALL_GO_ASPECTS=True
+FORCE_UNIPROT_SUMMARY=True
 GO_GPT_PREDICTIONS_COLUMN="go_pred"
 ADD_UNIPROT_SUMMARY=True
 
@@ -163,6 +165,8 @@ python "$EVAL_SCRIPT" \
     --interpro_in_prompt "$INTERPRO_IN_PROMPT" \
     --predict_interpro "$PREDICT_INTERPRO" \
     --ppi_in_prompt "$PPI_IN_PROMPT" \
+    --ask_all_go_aspects "$ASK_ALL_GO_ASPECTS" \
+    --force_uniprot_summary "$FORCE_UNIPROT_SUMMARY" \
     --add_uniprot_summary "$ADD_UNIPROT_SUMMARY" \
     --min_go_mf_freq $MIN_GO_MF_FREQ \
     --min_go_bp_freq $MIN_GO_BP_FREQ \

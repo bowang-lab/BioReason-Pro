@@ -108,12 +108,11 @@ def load_dataset(args):
         min_go_cc_freq=args.min_go_cc_freq,
         apply_go_filtering_to_val_test=args.apply_go_filtering_to_val_test,
         add_uniprot_summary=args.add_uniprot_summary,
-        # Inference always asks for a summary and for all three GO aspects, matching
-        # predict.py:_build_prompt and cafa6_eval.py. Deriving the aspect list from
-        # which go_mf/go_bp/go_cc happen to be populated would both diverge from the
-        # inference path and leak which aspects the protein is annotated for.
-        force_uniprot_summary=True,
-        ask_all_go_aspects=True,
+        # Default True: the prompt never depends on the example's own labels, and
+        # matches predict.py. Set both False to reproduce the published benchmark,
+        # whose prompts did derive these from the labels.
+        force_uniprot_summary=args.force_uniprot_summary,
+        ask_all_go_aspects=args.ask_all_go_aspects,
         debug=args.debug,
     )
     val_ds = val_ds.shuffle(seed=args.seed)
@@ -460,6 +459,16 @@ def setup_argument_parser() -> argparse.ArgumentParser:
              "`interpro_formatted` column.",
     )
     dataset_group.add_argument("--split_go_aspects", type=str2bool, default=True)
+    dataset_group.add_argument(
+        "--ask_all_go_aspects", type=str2bool, default=True,
+        help="Ask for all three GO aspects instead of deriving them from the "
+             "example's labels. False reproduces the published benchmark.",
+    )
+    dataset_group.add_argument(
+        "--force_uniprot_summary", type=str2bool, default=True,
+        help="Always request a UniProt summary instead of conditioning on whether "
+             "the protein has a known function. False reproduces the benchmark.",
+    )
     dataset_group.add_argument("--interpro_in_prompt", type=str2bool, default=True)
     dataset_group.add_argument("--predict_interpro", type=str2bool, default=False)
     dataset_group.add_argument("--ppi_in_prompt", type=str2bool, default=True)
