@@ -106,6 +106,20 @@ CAFA5_REASONING_TEMPLATE_WITH_CONTEXT = {
     "user_prompt": "Given the protein above from organism {organism} with the following InterPro annotations:\n{interpro_data}\n\nAnd the following initial GO term speculations:\n{go_speculations}\n\nReason about the function of the protein.",
 }
 
+# Same context template, but carrying the GO-aspect focus hint and the
+# UniProt-summary instruction without a PPI section.
+#
+# Needed because those two signals used to be reachable only through the PPI
+# templates, so ppi_in_prompt=False silently dropped them and scores collapsed.
+# Note this deliberately does NOT reproduce the published prompt: the published
+# runs always emitted the PPI block (as "None" when a protein had no partners).
+# Use ppi_in_prompt=True for benchmark reproduction; this path is for callers who
+# genuinely have no PPI data and should still get a well-formed instruction.
+CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_NO_PPI_UNIPROT = {
+    "system_prompt": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["system_prompt"],
+    "user_prompt": "Given the protein above from organism {organism} with the following InterPro annotations:\n{interpro_data}\n\nAnd the following initial GO term speculations:\n{go_speculations}\n\nReason about the function of the protein{go_aspects_suffix}{uniprot_summary}",
+}
+
 # Reasoning template with InterPro and/or GO speculations with PPI
 CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_PPI = {
     "system_prompt": "You are a scientific assistant specialized in protein function prediction. Given a protein sequence, organism information, and additional context (InterPro domain annotations and/or initial GO term speculations), step-by-step reason about the InterPro terms, Gene Ontology (GO) terms regarding molecular function, biological process, and cellular component, protein-protein interactions (PPI), and overall function. Use the provided information as a starting point and improve upon it with deeper analysis. Provide a summary of your findings in your final answer.",
