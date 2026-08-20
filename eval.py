@@ -108,9 +108,12 @@ def load_dataset(args):
         min_go_cc_freq=args.min_go_cc_freq,
         apply_go_filtering_to_val_test=args.apply_go_filtering_to_val_test,
         add_uniprot_summary=args.add_uniprot_summary,
-        # At inference there is no target to stay consistent with and a summary is
-        # always wanted, so always instruct the model to produce one.
+        # Inference always asks for a summary and for all three GO aspects, matching
+        # predict.py:_build_prompt and cafa6_eval.py. Deriving the aspect list from
+        # which go_mf/go_bp/go_cc happen to be populated would both diverge from the
+        # inference path and leak which aspects the protein is annotated for.
         force_uniprot_summary=True,
+        ask_all_go_aspects=True,
         debug=args.debug,
     )
     val_ds = val_ds.shuffle(seed=args.seed)
