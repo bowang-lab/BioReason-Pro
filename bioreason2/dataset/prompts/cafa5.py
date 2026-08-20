@@ -106,15 +106,6 @@ CAFA5_REASONING_TEMPLATE_WITH_CONTEXT = {
     "user_prompt": "Given the protein above from organism {organism} with the following InterPro annotations:\n{interpro_data}\n\nAnd the following initial GO term speculations:\n{go_speculations}\n\nReason about the function of the protein.",
 }
 
-# Same as CAFA5_REASONING_TEMPLATE_WITH_CONTEXT but carrying the GO-aspect focus
-# hint and the UniProt-summary instruction. Needed because those two are only
-# reachable through the PPI templates otherwise, so any run without PPI data
-# silently loses them.
-CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_UNIPROT = {
-    "system_prompt": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["system_prompt"],
-    "user_prompt": "Given the protein above from organism {organism} with the following InterPro annotations:\n{interpro_data}\n\nAnd the following initial GO term speculations:\n{go_speculations}\n\nReason about the function of the protein{go_aspects_suffix}{uniprot_summary}",
-}
-
 # Reasoning template with InterPro and/or GO speculations with PPI
 CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_PPI = {
     "system_prompt": "You are a scientific assistant specialized in protein function prediction. Given a protein sequence, organism information, and additional context (InterPro domain annotations and/or initial GO term speculations), step-by-step reason about the InterPro terms, Gene Ontology (GO) terms regarding molecular function, biological process, and cellular component, protein-protein interactions (PPI), and overall function. Use the provided information as a starting point and improve upon it with deeper analysis. Provide a summary of your findings in your final answer.",

@@ -111,7 +111,11 @@ REASONING_DATASET_NAME="default"
 SPLIT_GO_ASPECTS=False
 INTERPRO_IN_PROMPT=True
 PREDICT_INTERPRO=False
-PPI_IN_PROMPT=False
+# Must be True to reproduce the published benchmark. It is not really about PPI:
+# ppi_in_prompt=True is the only branch in _format_reasoning_prompt that emits the
+# GO-aspect focus hint and the UniProt-summary instruction. With False the prompt
+# loses both and scores collapse.
+PPI_IN_PROMPT=True
 GO_GPT_PREDICTIONS_COLUMN="go_pred"
 ADD_UNIPROT_SUMMARY=True
 
