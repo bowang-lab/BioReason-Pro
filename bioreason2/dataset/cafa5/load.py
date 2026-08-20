@@ -13,7 +13,6 @@ from bioreason2.dataset.prompts.cafa5 import (
     CAFA5_REASONING_TEMPLATE,
     CAFA5_REASONING_TEMPLATE_WITH_CONTEXT,
     CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_PPI,
-    CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_UNIPROT,
     CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_PPI_UNIPROT,
     CAFA5_REASONING_TEMPLATE_SWISSPROT,
 )
@@ -323,34 +322,17 @@ def _format_reasoning_prompt(example, go_gpt_predictions_column=None, interpro_i
                 "assistant_answer": assistant_answer,
             }
     elif interpro_data or go_speculations:
-        # Context template without PPI. The GO-aspect focus hint and the
-        # UniProt-summary instruction must survive here too: they used to be
-        # reachable only through the PPI branch, so a run without PPI data
-        # silently dropped both even with add_uniprot_summary=True.
-        if add_uniprot_summary:
-            prompt_dict = {
-                "system": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_UNIPROT["system_prompt"],
-                "user": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT_UNIPROT["user_prompt"].format(
-                    organism=organism,
-                    interpro_data=interpro_data if interpro_data else "None",
-                    go_speculations=go_speculations if go_speculations else "None",
-                    go_aspects_suffix=go_aspects_suffix,
-                    uniprot_summary=uniprot_summary,
-                ),
-                "assistant_reasoning": example["reasoning"] if "reasoning" in example else "",
-                "assistant_answer": assistant_answer,
-            }
-        else:
-            prompt_dict = {
-                "system": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["system_prompt"],
-                "user": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["user_prompt"].format(
-                    organism=organism,
-                    interpro_data=interpro_data if interpro_data else "",
-                    go_speculations=go_speculations if go_speculations else ""
-                ),
-                "assistant_reasoning": example["reasoning"] if "reasoning" in example else "",
-                "assistant_answer": assistant_answer,
-            }
+        # Use context template without PPI
+        prompt_dict = {
+            "system": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["system_prompt"],
+            "user": CAFA5_REASONING_TEMPLATE_WITH_CONTEXT["user_prompt"].format(
+                organism=organism,
+                interpro_data=interpro_data if interpro_data else "",
+                go_speculations=go_speculations if go_speculations else ""
+            ),
+            "assistant_reasoning": example["reasoning"] if "reasoning" in example else "",
+            "assistant_answer": assistant_answer,
+        }
     else:
         # Use standard template (no additional context)
         prompt_dict = {
