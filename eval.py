@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-CAFA-5 Evaluation Script
+CAFA Evaluation Script (batched inference)
 
 Features:
-- Modular function design for maintainability
+- Batched inference: one vLLM call per batch
 - Individual JSON file output per protein_id + go_aspect combination
-- Robust error handling and logging
-- Progress tracking and resumable execution
-- Multi-GPU safe concurrent execution
-- Professional argument parsing with grouped options
+- Resumable: a protein that already has a result file is skipped
+- Multi-GPU safe concurrent execution via --num_chunks / --chunk_id
+- Per-sample retry on OOM
 
 Usage:
     python eval.py --ckpt_dir /path/to/checkpoint --evals_path /path/to/results [options]
@@ -18,10 +17,11 @@ import argparse
 import json
 import os
 import time
-from typing import Any, Dict, List
+import traceback
+from typing import Any, Dict, List, Optional
+
 import torch
 from tqdm import tqdm
-import traceback
 
 from bioreason2.models.protein_vllm import ProteinLLMModel
 from bioreason2.dataset.cafa5.load import load_cafa5_dataset
@@ -30,10 +30,10 @@ from bioreason2.utils import str2bool
 # Constants
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STOP_TOKENS = ["<|im_end|>"]
-ERROR_LOG_FILE = "evaluation_errors.json"
 
 # GO Aspect mapping for cleaner filenames
 GO_ASPECT_CODES = {"molecular_function": "MF", "cellular_component": "CC", "biological_process": "BP"}
+
 
 def get_go_aspect_code(go_aspect: str) -> str:
     """Convert GO aspect to short code for cleaner filenames."""
@@ -55,9 +55,18 @@ def _get_ground_truth(sample: Dict[str, Any]) -> str:
     return sample.get("answer", "")
 
 
+def text_token_budget(args) -> int:
+    """Tokenizer cap for the text part, so prompt + protein + GO fits max_model_len.
+
+    The processor truncates at max_length_text + 200 GO tokens + max_length_protein + 2;
+    letting that exceed the context window makes vLLM reject the request outright.
+    """
+    return max(1, args.max_model_len - 200 - args.max_length_protein - 2)
+
+
 def initialize_model(args) -> ProteinLLMModel:
     """Initialize and return the ProteinLLMModel."""
-    print(f"📥 Loading ProteinLLMModel from checkpoint: {args.ckpt_dir}...")
+    print(f"Loading ProteinLLMModel from checkpoint: {args.ckpt_dir}...")
     model = ProteinLLMModel(
         ckpt_dir=args.ckpt_dir,
         protein_model_name=args.protein_model_name,
@@ -65,7 +74,7 @@ def initialize_model(args) -> ProteinLLMModel:
         go_obo_path=args.go_obo_path,
         precomputed_embeddings_path=args.precomputed_embeddings_path,
         max_length_protein=args.max_length_protein,
-        max_length_text=args.max_model_len,
+        max_length_text=text_token_budget(args),
         max_model_len=args.max_model_len,
         unified_go_encoder=args.unified_go_encoder,
         go_hidden_dim=args.go_hidden_dim,
@@ -73,6 +82,8 @@ def initialize_model(args) -> ProteinLLMModel:
         go_num_heads=args.go_num_heads,
         go_num_reduced_embeddings=args.go_num_reduced_embeddings,
         go_embedding_dim=args.go_embedding_dim,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_num_seqs=args.max_num_seqs,
         text_model_finetune=False,
         protein_model_finetune=False,
         go_model_finetune=False,
@@ -82,9 +93,9 @@ def initialize_model(args) -> ProteinLLMModel:
 
 
 def load_dataset(args):
-    """Load and prepare the CAFA-5 validation dataset."""
-    print("\n📥 Loading and preparing CAFA-5 validation dataset...")
-    _, val_ds, _ = load_cafa5_dataset(
+    """Load and prepare the evaluation dataset."""
+    print(f"\nLoading dataset (split: {args.cafa5_dataset_split})...")
+    train_ds, val_ds, test_ds = load_cafa5_dataset(
         dataset=args.cafa5_dataset,
         dataset_name=args.cafa5_dataset_name,
         cache_dir=args.dataset_cache_dir,
@@ -115,171 +126,179 @@ def load_dataset(args):
         ask_all_go_aspects=args.ask_all_go_aspects,
         debug=args.debug,
     )
-    val_ds = val_ds.shuffle(seed=args.seed)
 
-    if not val_ds or len(val_ds) == 0:
-        raise ValueError("Validation dataset is empty or failed to load.")
+    dataset = {"train": train_ds, "val": val_ds, "test": test_ds}[args.cafa5_dataset_split]
+    if not dataset or len(dataset) == 0:
+        raise ValueError(f"Dataset split '{args.cafa5_dataset_split}' is empty or failed to load.")
 
-    n_samples = len(val_ds) if args.max_samples <= 0 else min(args.max_samples, len(val_ds))
+    dataset = dataset.shuffle(seed=args.seed)
+    n_samples = len(dataset) if args.max_samples <= 0 else min(args.max_samples, len(dataset))
 
     # Handle chunking for multi-GPU processing
     if args.num_chunks > 1:
         chunk_size = n_samples // args.num_chunks
         start_idx = args.chunk_id * chunk_size
-
-        if args.chunk_id == args.num_chunks - 1:
-            # Last chunk gets any remaining samples
-            end_idx = n_samples
-        else:
-            end_idx = start_idx + chunk_size
-
-        print(f"Processing chunk {args.chunk_id + 1}/{args.num_chunks}: samples {start_idx} to {end_idx-1}")
-        samples = val_ds.select(range(start_idx, end_idx))
+        # Last chunk gets any remaining samples
+        end_idx = n_samples if args.chunk_id == args.num_chunks - 1 else start_idx + chunk_size
+        print(f"Processing chunk {args.chunk_id + 1}/{args.num_chunks}: samples {start_idx} to {end_idx - 1}")
+        samples = dataset.select(range(start_idx, end_idx))
     else:
-        print("📊 Processing full dataset (no chunking)")
-        samples = val_ds.select(range(n_samples))
+        print("Processing full dataset (no chunking)")
+        samples = dataset.select(range(n_samples))
 
     print(f"Loaded {len(samples)} samples for evaluation.")
     return samples
 
 
-def filter_unprocessed_samples(samples, evals_path: str) -> List[Dict[str, Any]]:
-    """Filter out already processed samples and return only unprocessed ones.
-    
-    Simplified logic: If ANY file exists for a (protein_id, go_aspect) combination,
-    skip it entirely. Don't worry about whether all k iterations are complete.
+def filter_unprocessed_samples(samples, evals_path: str):
+    """Drop samples that already have a result file, returning a Dataset.
+
+    Reads protein_id/go_aspect columnwise; row-by-row iteration would decode the
+    full sequence and prompt just to read two strings.
     """
     os.makedirs(evals_path, exist_ok=True)
     processed_ids = set()
 
-    if os.path.exists(evals_path):
-        existing_files = os.listdir(evals_path)
-        for filename in existing_files:
-            if filename.endswith(".json"):
-                # Parse filename: {protein_id}_{go_aspect_code}_k{i:02d}.json
-                parts = filename.split("_")
-                if len(parts) >= 2:
-                    processed_unique_id = f"{parts[0]}_{parts[1]}"
-                    processed_ids.add(processed_unique_id)
-        
-        print(f"🔄 Found {len(processed_ids)} samples with at least one result file.")
+    for filename in os.listdir(evals_path):
+        if filename.endswith(".json"):
+            # Filename is {protein_id}_{go_aspect_code}_k{i:02d}.json
+            parts = filename.split("_")
+            if len(parts) >= 2:
+                processed_ids.add(f"{parts[0]}_{parts[1]}")
+    print(f"Found {len(processed_ids)} samples with at least one result file.")
 
-    # Filter out already processed samples
-    print("🔍 Filtering out already processed samples...")
-    unprocessed_samples = []
-    for sample in samples:
-        protein_id = sample.get("protein_id")
-        go_aspect = sample.get("go_aspect")
-        go_aspect_code = get_go_aspect_code(go_aspect)
-        sample_unique_id = f"{protein_id}_{go_aspect_code}"
-        
-        if sample_unique_id not in processed_ids:
-            unprocessed_samples.append(sample)
-    
-    print(f"📊 Total samples: {len(samples)}")
-    print(f"Already processed: {len(samples) - len(unprocessed_samples)}")
-    print(f"Remaining to process: {len(unprocessed_samples)}")
+    protein_ids = samples["protein_id"]
+    go_aspects = samples["go_aspect"]
+    keep = [
+        i
+        for i, (pid, aspect) in enumerate(zip(protein_ids, go_aspects))
+        if f"{pid}_{get_go_aspect_code(aspect)}" not in processed_ids
+    ]
 
-    return unprocessed_samples
+    print(f"Total samples: {len(samples)}")
+    print(f"Already processed: {len(samples) - len(keep)}")
+    print(f"Remaining to process: {len(keep)}")
+    return samples.select(keep)
+
+
+def batch_slice(dataset, start: int, end: int) -> List[Dict[str, Any]]:
+    """Rows [start, end) as a list of dicts, via a single Arrow slice."""
+    columns = dataset[start:end]
+    n = end - start
+    return [{key: values[i] for key, values in columns.items()} for i in range(n)]
 
 
 def save_result(result_record: Dict[str, Any], protein_id: str, go_aspect: str, evals_path: str, k_idx: int = 0) -> None:
     """Save individual result to its own JSON file using short GO aspect codes."""
     go_aspect_code = get_go_aspect_code(go_aspect)
     result_filename = f"{protein_id}_{go_aspect_code}_k{k_idx:02d}.json"
-    result_filepath = os.path.join(evals_path, result_filename)
-
-    with open(result_filepath, "w") as f:
+    with open(os.path.join(evals_path, result_filename), "w") as f:
         json.dump(result_record, f, indent=4)
 
 
-def log_error(error_type: str, protein_id: str, go_aspect: str, go_bp: str, go_mf: str, go_cc: str, go_bp_leaf: str, go_mf_leaf: str, go_cc_leaf: str, error_msg: str = "") -> None:
-    """Log errors to a centralized JSON file."""
-    error_record = {
+def log_error(error_log_path: str, error_type: str, protein_id: str, go_aspect: str, error_msg: str = "") -> None:
+    """Append an error record to the run's error log."""
+    record = {
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "error_type": error_type,
         "protein_id": protein_id,
         "go_aspect": go_aspect,
-        "go_bp": go_bp,
-        "go_mf": go_mf,
-        "go_cc": go_cc,
-        "go_bp_leaf": go_bp_leaf,
-        "go_mf_leaf": go_mf_leaf,
-        "go_cc_leaf": go_cc_leaf,
-        "error_message": error_msg if error_msg else ("Out of Memory" if error_type == "oom" else "Unknown error"),
+        "error_message": error_msg or ("Out of Memory" if error_type == "oom" else "Unknown error"),
     }
 
-    # Load existing errors or create new list
     errors = []
-    if os.path.exists(ERROR_LOG_FILE):
+    if os.path.exists(error_log_path):
         try:
-            with open(ERROR_LOG_FILE, "r") as f:
+            with open(error_log_path) as f:
                 errors = json.load(f)
-        except (json.JSONDecodeError, Exception):
+        except Exception:
             errors = []
+    errors.append(record)
 
-    # Append new error
-    errors.append(error_record)
-
-    # Save back to file
-    with open(ERROR_LOG_FILE, "w") as f:
+    with open(error_log_path, "w") as f:
         json.dump(errors, f, indent=4)
 
 
-def process_single_sample(
-    model: ProteinLLMModel, sample: Dict[str, Any], protein_id: str, go_aspect: str, go_bp: str, go_mf: str, go_cc: str, go_bp_leaf: str, go_mf_leaf: str, go_cc_leaf: str, args
-) -> Dict[str, Any]:
-    """Process a single sample and return the result."""
+def _build_prompt_string(model, sample: Dict[str, Any], args) -> Optional[str]:
+    """Chat-template string for one sample, or None if it cannot be built."""
     conversation_data = sample.get("prompt")
     if conversation_data is None:
-        print(f"No prompt data for protein {protein_id}, skipping...")
         return None
 
-    # Extract only system and user messages for generation
-    # Filter out assistant messages to create proper generation prompt
+    # Keep system and user messages; stop at the first assistant turn
     user_conversation = []
     for message in conversation_data:
         if message.get("role") in ["system", "user"]:
             user_conversation.append(message)
         elif message.get("role") == "assistant":
-            # Stop at first assistant message - we only want the input
             break
 
-    final_prompt_string = model.text_tokenizer.apply_chat_template(
+    return model.text_tokenizer.apply_chat_template(
         user_conversation,
         tokenize=False,
         add_generation_prompt=True,
-        enable_thinking=args.enable_thinking,  # Avoid empty thinking injection
+        enable_thinking=args.enable_thinking,
     )
 
-    sequence = sample.get("sequence")
-    if sequence is None:
-        print(f"No sequence data for protein {protein_id}, skipping...")
+
+def prepare_batch_inputs(model: ProteinLLMModel, batch_samples: List[Dict[str, Any]], args) -> Optional[Dict[str, Any]]:
+    """Tokenize a batch. Returns None when no sample in the batch is usable."""
+    prompts, sequences, go_aspects, keep = [], [], [], []
+    for sample in batch_samples:
+        prompt = _build_prompt_string(model, sample, args)
+        sequence = sample.get("sequence")
+        if prompt is None or sequence is None:
+            continue
+        prompts.append(prompt)
+        sequences.append(sequence)
+        go_aspects.append(sample.get("go_aspect", "all"))
+        keep.append(sample)
+
+    if not prompts:
         return None
 
-    processed_inputs = model.processor(
-        text=[final_prompt_string],
-        batch_protein_sequences=[[sequence]],
-        batch_go_aspects=[go_aspect],
-        max_length_text=model.max_length_text,
-        max_length_protein=model.max_length_protein,
-        return_tensors="pt",
-    )
+    # Left-pad so content sits at the end of every row. generate() strips padding
+    # before handing embeddings to vLLM either way; this matches predict.py.
+    original_padding_side = model.text_tokenizer.padding_side
+    model.text_tokenizer.padding_side = "left"
+    try:
+        processed_inputs = model.processor(
+            # Copy: the processor expands <|protein_pad|> in place.
+            text=list(prompts),
+            batch_protein_sequences=[[s] for s in sequences],
+            batch_go_aspects=go_aspects,
+            max_length_text=model.max_length_text,
+            max_length_protein=model.max_length_protein,
+            return_tensors="pt",
+        )
+    finally:
+        model.text_tokenizer.padding_side = original_padding_side
 
-    input_ids = processed_inputs.get("input_ids").to(DEVICE)
-    attention_mask = processed_inputs.get("attention_mask").to(DEVICE)
-    structure_coords = processed_inputs.get("structure_coords")
+    return {
+        "input_ids": processed_inputs.get("input_ids").to(DEVICE),
+        "attention_mask": processed_inputs.get("attention_mask").to(DEVICE),
+        "structure_coords": processed_inputs.get("structure_coords"),
+        "sequences": sequences,
+        "go_aspects": go_aspects,
+        "prompts": prompts,
+        "samples": keep,
+    }
 
-    # Run Inference
+
+def process_batch(model: ProteinLLMModel, batch_samples: List[Dict[str, Any]], args) -> List[Dict[str, Any]]:
+    """Run one batched generation and build a result record per sample."""
+    batch_inputs = prepare_batch_inputs(model, batch_samples, args)
+    if batch_inputs is None:
+        return []
+
     with torch.inference_mode():
         generated_outputs = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            protein_sequences=[sequence],
-            batch_idx_map=[0],
-            go_aspects=[go_aspect],
-            structure_coords=structure_coords,
-            # Pass generation parameters from args
+            input_ids=batch_inputs["input_ids"],
+            attention_mask=batch_inputs["attention_mask"],
+            protein_sequences=batch_inputs["sequences"],
+            batch_idx_map=list(range(len(batch_inputs["sequences"]))),
+            go_aspects=batch_inputs["go_aspects"],
+            structure_coords=batch_inputs["structure_coords"],
             temperature=args.temperature,
             top_p=args.top_p,
             max_new_tokens=args.max_new_tokens,
@@ -287,111 +306,118 @@ def process_single_sample(
             stop=STOP_TOKENS,
         )
 
-    response_text = generated_outputs[0] if generated_outputs else "Error: Empty response"
+    results = []
+    for i, sample in enumerate(batch_inputs["samples"]):
+        text = generated_outputs[i] if i < len(generated_outputs) else ""
+        sequence = batch_inputs["sequences"][i]
+        results.append({
+            "protein_id": sample.get("protein_id"),
+            "go_aspect": batch_inputs["go_aspects"][i],
+            "ground_truth": _get_ground_truth(sample),
+            "generated_response": text,
+            # Always True: marking an empty generation as failed makes
+            # cafa_evals.py drop the protein from ground truth too, inflating Fmax.
+            "success": True,
+            "protein_sequence": sequence,
+            "input_prompt": batch_inputs["prompts"][i],
+            "sequence_length": len(sequence) if sequence else 0,
+            "go_bp": sample.get("go_bp", ""),
+            "go_mf": sample.get("go_mf", ""),
+            "go_cc": sample.get("go_cc", ""),
+            "go_bp_leaf": sample.get("go_bp_leaf", ""),
+            "go_mf_leaf": sample.get("go_mf_leaf", ""),
+            "go_cc_leaf": sample.get("go_cc_leaf", ""),
+        })
+    return results
 
-    result_record = {
-        "protein_id": protein_id,
-        "go_aspect": go_aspect,
-        "ground_truth": _get_ground_truth(sample),
-        "generated_response": response_text,
-        "success": True,
-        "protein_sequence": sequence,
-        "input_prompt": final_prompt_string,
-        "sequence_length": len(sequence) if sequence else 0,
-        "go_bp": go_bp,
-        "go_mf": go_mf,
-        "go_cc": go_cc,
-        "go_bp_leaf": go_bp_leaf,
-        "go_mf_leaf": go_mf_leaf,
-        "go_cc_leaf": go_cc_leaf,
-    }
 
-    return result_record
-
-
-def print_final_statistics(newly_processed: int, total_time: float, evals_path: str) -> None:
+def print_final_statistics(newly_processed: int, empty_responses: int, total_time: float, evals_path: str) -> None:
     """Print final evaluation statistics."""
     total_files = len([f for f in os.listdir(evals_path) if f.endswith(".json")])
 
     print("\nEvaluation complete.")
-    print(f"⏱️  Processed {newly_processed} new samples in {total_time:.2f}s")
+    print(f"Processed {newly_processed} new samples in {total_time:.2f}s")
     if newly_processed > 0:
-        print(f"📈 Processing rate: {newly_processed/total_time:.2f} samples/s")
-    print(f"💾 Total result files: {total_files} in directory: {evals_path}")
-    print("Individual JSON files saved for each protein_id + aspect combination")
+        print(f"Processing rate: {newly_processed / total_time:.2f} samples/s")
+    if empty_responses:
+        print(f"WARNING: {empty_responses} samples generated an empty response; "
+              f"they are scored as a miss, not dropped.")
+    print(f"Total result files: {total_files} in directory: {evals_path}")
 
 
-def run_local_inference(args):
-    """
-    Main function to orchestrate data loading, model inference, and result saving.
-    """
-    print("--- Starting Local CAFA-5 Inference ---")
+def run_inference(args):
+    """Orchestrate data loading, batched model inference, and result saving."""
+    print("--- Starting batched CAFA inference ---")
+    print(f"Batch size: {args.batch_size}")
+
+    # Not .json: everything scanning evals_path for *.json treats those as results.
+    error_log_path = os.path.join(args.evals_path, f"evaluation_errors_chunk{args.chunk_id:03d}.log")
 
     try:
-        # Initialize model
         model = initialize_model(args)
-
-        # Load dataset
         samples = load_dataset(args)
+        unprocessed = filter_unprocessed_samples(samples, args.evals_path)
 
-        # Filter out already processed samples
-        unprocessed_samples = filter_unprocessed_samples(samples, args.evals_path)
+        n = len(unprocessed)
+        if n == 0:
+            print("All samples already processed. Nothing to do.")
+            return
 
-        # Main inference loop - only process unprocessed samples
-        print(f"\nStarting inference loop with pass@{args.pass_at_k}...")
+        bs = max(1, args.batch_size)
+        num_batches = (n + bs - 1) // bs
+        print(f"\nStarting inference: {n} samples, batch_size={bs}, {num_batches} batches, pass@{args.pass_at_k}")
+
         t_start = time.time()
         successfully_processed = 0
+        empty_responses = 0
 
-        for sample in tqdm(unprocessed_samples, desc="Processing Samples", total=len(unprocessed_samples), unit="sample"):
-            protein_id = sample.get("protein_id")
-            go_aspect = sample.get("go_aspect", "all")
-            go_bp = sample.get("go_bp", "")
-            go_mf = sample.get("go_mf", "")
-            go_cc = sample.get("go_cc", "")
-            go_bp_leaf = sample.get("go_bp_leaf", "")
-            go_mf_leaf = sample.get("go_mf_leaf", "")
-            go_cc_leaf = sample.get("go_cc_leaf", "")
+        for batch_idx in tqdm(range(num_batches), desc="Processing batches", unit="batch"):
+            batch_samples = batch_slice(unprocessed, batch_idx * bs, min((batch_idx + 1) * bs, n))
 
-            # Generate k samples for pass@k
-            sample_has_success = False
             for k_idx in range(args.pass_at_k):
                 try:
-                    result_record = process_single_sample(model, sample, protein_id, go_aspect, go_bp, go_mf, go_cc, go_bp_leaf, go_mf_leaf, go_cc_leaf, args)
-                    if result_record is not None:
-                        save_result(result_record, protein_id, go_aspect, args.evals_path, k_idx=k_idx)
-                        if not sample_has_success:
-                            successfully_processed += 1
-                            sample_has_success = True
+                    records = process_batch(model, batch_samples, args)
 
                 except torch.cuda.OutOfMemoryError:
-                    print(f"CUDA Out of Memory on sample ID: {protein_id}, k={k_idx}. Skipping this k iteration.")
-                    log_error("oom", protein_id, go_aspect, go_bp, go_mf, go_cc, go_bp_leaf, go_mf_leaf, go_cc_leaf)
+                    print(f"\nCUDA OOM on batch {batch_idx} (k={k_idx}); retrying its samples individually.")
                     torch.cuda.empty_cache()
-                    continue
+                    records = []
+                    for sample in batch_samples:
+                        try:
+                            records.extend(process_batch(model, [sample], args))
+                        except Exception as exc:
+                            log_error(error_log_path, "oom", sample.get("protein_id", "unknown"),
+                                      sample.get("go_aspect", "all"), str(exc))
+                            torch.cuda.empty_cache()
 
-                except Exception as e:
-                    print(f"Unexpected error on sample ID {protein_id}, k={k_idx}: {e}")
-                    log_error("other", protein_id, go_aspect, go_bp, go_mf, go_cc, go_bp_leaf, go_mf_leaf, go_cc_leaf, str(e))
+                except Exception as exc:
+                    ids = ",".join(str(s.get("protein_id")) for s in batch_samples)
+                    print(f"\nError on batch {batch_idx} (k={k_idx}) [{ids}]: {exc}")
                     traceback.print_exc()
+                    for sample in batch_samples:
+                        log_error(error_log_path, "batch_error", sample.get("protein_id", "unknown"),
+                                  sample.get("go_aspect", "all"), str(exc))
                     continue
 
-        # Print final statistics
-        t_end = time.time()
-        dt = t_end - t_start
-        print_final_statistics(successfully_processed, dt, args.evals_path)
+                for record in records:
+                    save_result(record, record["protein_id"], record["go_aspect"], args.evals_path, k_idx=k_idx)
+                    if not record["generated_response"].strip():
+                        empty_responses += 1
+                    if k_idx == 0:
+                        successfully_processed += 1
 
-    except Exception as e:
-        # Must not swallow this. A sharded evaluation that dies here but exits 0
-        # looks COMPLETED to the scheduler, and the missing shard is only noticed
-        # when someone counts the output files.
-        print(f"Critical Error: {e}")
+        print_final_statistics(successfully_processed, empty_responses, time.time() - t_start, args.evals_path)
+
+    except Exception as exc:
+        # Must not swallow this: exiting 0 makes a dead shard look COMPLETED.
+        print(f"Critical Error: {exc}")
         traceback.print_exc()
         raise SystemExit(1)
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:
     """Setup and return the argument parser."""
-    parser = argparse.ArgumentParser(description="Local CAFA inference with ProteinLLMModel")
+    parser = argparse.ArgumentParser(description="Batched CAFA inference with ProteinLLMModel")
 
     # Model arguments
     model_group = parser.add_argument_group("Model Configuration")
@@ -420,7 +446,17 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         default=False,
         help="If True, use unified GOGraphEncoderUnified; if False, use original GOGraphEncoder.",
     )
-    model_group.add_argument("--max_model_len", type=int, default=32768, help="Maximum length of the model.")
+    model_group.add_argument("--max_model_len", type=int, default=8192,
+                             help="Maximum context length for vLLM (prompt + generation).")
+    model_group.add_argument(
+        "--gpu_memory_utilization", type=float, default=0.5,
+        help="Fraction of GPU memory vLLM may use. ESM3, the GO encoder and the "
+             "batch's prompt embeddings are allocated outside it, so leave headroom.",
+    )
+    model_group.add_argument(
+        "--max_num_seqs", type=int, default=256,
+        help="Upper bound on sequences vLLM runs concurrently.",
+    )
     model_group.add_argument(
         "--go_hidden_dim", type=int, default=512, help="Hidden dimension for GO GAT layers (must match training)."
     )
@@ -445,6 +481,11 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     dataset_group.add_argument("--cafa5_dataset", type=str, default="wanglab/cafa5")
     dataset_group.add_argument("--cafa5_dataset_name", type=str, default="cafa5_reasoning")
     dataset_group.add_argument("--cafa5_dataset_subset", type=str, default=None)
+    dataset_group.add_argument(
+        "--cafa5_dataset_split", type=str, default="val", choices=["train", "val", "test"],
+        help="Which split to evaluate. A dataset with only a `test` split is returned "
+             "as the validation split too, so the default works for it.",
+    )
     dataset_group.add_argument("--dataset_cache_dir", type=str, default=None)
     dataset_group.add_argument(
         "--structure_dir", type=str, default=None
@@ -521,14 +562,21 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     # Evaluation controls
     eval_group = parser.add_argument_group("Evaluation Configuration")
     eval_group.add_argument("--max_samples", type=int, default=-1, help="Max samples to process (-1 for all).")
-    eval_group.add_argument("--max_new_tokens", type=int, default=1024)
+    eval_group.add_argument(
+        "--batch_size", type=int, default=16,
+        help="Samples per vLLM generation call, and so the number of sequences "
+             "decoded concurrently. Raise for throughput; set 1 for one at a time.",
+    )
+    eval_group.add_argument("--max_new_tokens", type=int, default=3000,
+                            help="Must leave room for the model to finish reasoning and emit "
+                                 "its GO summary; truncating produces empty predictions.")
     eval_group.add_argument("--temperature", type=float, default=0.1)
     eval_group.add_argument("--top_p", type=float, default=0.9)
     eval_group.add_argument("--repetition_penalty", type=float, default=1.0)
     eval_group.add_argument(
-        "--pass_at_k", 
-        type=int, 
-        default=1, 
+        "--pass_at_k",
+        type=int,
+        default=1,
         help="Number of inference attempts per sample for pass@k evaluation (default: 1). Use temperature > 0 for diversity."
     )
 
@@ -556,4 +604,4 @@ def setup_argument_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     parser = setup_argument_parser()
     args = parser.parse_args()
-    run_local_inference(args)
+    run_inference(args)

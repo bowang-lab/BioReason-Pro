@@ -196,6 +196,8 @@ cython_debug/
 !organism_list.txt
 # information-accretion weights, required for weighted Fmax
 !data/IA.txt
+# proteins the published evaluation excluded
+!data/common_proteins.txt
 *.out
 *.err
 trainer_output/

@@ -566,10 +566,22 @@ class ProteinLLMModel(nn.Module):
             repetition_penalty=generation_kwargs.get("repetition_penalty", 1.0),
         )
 
-        # Build requests for vLLM generation
+        # Build requests for vLLM generation.
+        #
+        # Strip padding first. The processor right-pads the batch and pad_token is
+        # eos_token, so a shorter sequence ends in trailing end-of-turn embeddings.
+        # vLLM gets prompt_embeds with no attention mask, so it reads those as
+        # "generation already finished" and returns an empty string. With batch_size
+        # > 1 and unequal protein lengths this silently blanks part of every batch.
+        pad_token_id = self.text_tokenizer.pad_token_id
         requests = []
         for i in range(batch_size):
-            requests.append({"prompt_embeds": text_inputs_embeds[i]})
+            embeds = text_inputs_embeds[i]
+            if pad_token_id is not None:
+                non_pad = (input_ids[i] != pad_token_id).nonzero()
+                if non_pad.numel() > 0:
+                    embeds = embeds[non_pad[0].item(): non_pad[-1].item() + 1]
+            requests.append({"prompt_embeds": embeds})
 
         # Generate for the entire batch in one call
         vllm_outputs = self.text_model.generate(requests, sampling_params=sampling_params)

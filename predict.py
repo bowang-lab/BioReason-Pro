@@ -73,16 +73,17 @@ MODEL_ARCH = dict(
     go_embedding_dim=2560,
 )
 
-# Generation defaults
+# Generation defaults. Kept in step with eval.py.
 GEN_DEFAULTS = dict(
-    max_new_tokens=5000,
+    max_new_tokens=3000,
     temperature=0.0,
     top_p=0.95,
     repetition_penalty=1.0,
-    batch_size=4,
+    batch_size=16,
     max_length_protein=2000,
-    max_model_len=32768,
-    gpu_memory_utilization=0.9,
+    max_model_len=8192,
+    # vLLM's share only; ESM3, the GO encoder and prompt embeddings sit outside it.
+    gpu_memory_utilization=0.5,
     max_num_seqs=256,
 )
 
@@ -322,47 +323,6 @@ def _build_chat_messages(organism: str, interpro: str, gogpt: str) -> List[Dict]
     ]
 
 
-def _truncate_and_left_pad_batch(
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
-    tokenizer,
-    device: str,
-) -> tuple:
-    """Truncate batch after assistant start marker and re-pad with left padding."""
-    pad_id = tokenizer.pad_token_id
-    if pad_id is None:
-        pad_id = tokenizer.eos_token_id
-
-    composite = "<|im_end|>\n<|im_start|>assistant\n"
-    comp_ids = tokenizer.encode(composite, add_special_tokens=False)
-    comp_t = torch.tensor(comp_ids, device=device)
-    comp_len = len(comp_ids)
-
-    B, L = input_ids.shape
-    keep_lens: List[int] = []
-
-    for i in range(B):
-        ids = input_ids[i]
-        keep = L
-        for j in range(0, L - comp_len + 1):
-            if torch.all(ids[j : j + comp_len] == comp_t):
-                keep = j + comp_len
-                break
-        keep_lens.append(keep)
-
-    new_max = max(keep_lens) if keep_lens else 0
-    new_input_ids = torch.full((B, new_max), pad_id, dtype=input_ids.dtype, device=device)
-    new_attention = torch.zeros((B, new_max), dtype=attention_mask.dtype, device=device)
-
-    for i, k in enumerate(keep_lens):
-        if k == 0:
-            continue
-        new_input_ids[i, -k:] = input_ids[i, :k]
-        new_attention[i, -k:] = attention_mask[i, :k]
-
-    return new_input_ids, new_attention
-
-
 def run_bioreason_stage(
     proteins: List[Dict[str, str]],
     interpro_results: Dict[str, str],
@@ -394,7 +354,7 @@ def run_bioreason_stage(
         go_obo_path=GO_OBO_PATH,
         precomputed_embeddings_path=precomputed_path,
         max_length_protein=GEN_DEFAULTS["max_length_protein"],
-        max_length_text=GEN_DEFAULTS["max_model_len"],
+        max_length_text=GEN_DEFAULTS["max_model_len"] - 200 - GEN_DEFAULTS["max_length_protein"] - 2,
         max_model_len=GEN_DEFAULTS["max_model_len"],
         gpu_memory_utilization=GEN_DEFAULTS["gpu_memory_utilization"],
         max_num_seqs=GEN_DEFAULTS["max_num_seqs"],
@@ -452,10 +412,6 @@ def run_bioreason_stage(
 
             input_ids = processed.get("input_ids").to(DEVICE)
             attention_mask = processed.get("attention_mask").to(DEVICE)
-
-            input_ids, attention_mask = _truncate_and_left_pad_batch(
-                input_ids, attention_mask, model.text_tokenizer, DEVICE
-            )
 
             with torch.inference_mode():
                 outputs = model.generate(
