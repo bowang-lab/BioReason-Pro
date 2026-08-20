@@ -275,7 +275,8 @@ def process_json_data(
     base_dir: str, 
     reasoning_mode: bool = False, 
     final_answer_only: bool = False,
-    go_dag=None
+    go_dag=None,
+    exclude_ids: Set[str] = None,
 ) -> Tuple[List[Tuple[str, Set[str]]], List[Tuple[str, Set[str]]]]:
     """
     Process JSON files from directory and extract predictions and ground truth.
@@ -329,8 +330,12 @@ def process_json_data(
             print(f"{Fore.YELLOW}Selecting best scoring sample per protein{Style.RESET_ALL}")
         else:
             print(f"Found {total_proteins} unique proteins (single sample each)")
-
+    excluded_count = 0
     for (protein_id, go_aspect_code), k_samples in tqdm(grouped_data.items(), desc="Processing proteins"):
+
+        if exclude_ids and protein_id in exclude_ids:
+            excluded_count += 1
+            continue
 
         total_samples += 1
         
@@ -392,6 +397,8 @@ def process_json_data(
     print(f"Total samples processed: {total_samples}")
     print(f"Successful samples: {successful_samples}")
     print(f"Failed samples: {total_samples - successful_samples}")
+    if exclude_ids:
+        print(f"Excluded by --exclude_file: {excluded_count} proteins")
     
     print(f"\n{Fore.CYAN}PREDICTION STATISTICS{Style.RESET_ALL}")
     print(f"Proteins with predictions: {len(predictions)}")
@@ -541,6 +548,14 @@ def main():
 
     parser = argparse.ArgumentParser(description="CAFA GO Term Evaluation Pipeline")
     parser.add_argument(
+        "--exclude_file",
+        type=str,
+        default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "common_proteins.txt"),
+        help="Newline-separated protein ids to exclude from scoring. Defaults to "
+             "data/common_proteins.txt, which the published evaluation excluded. "
+             "Pass an empty string to score every protein.",
+    )
+    parser.add_argument(
         "--input_dir",
         "-i",
         required=True,
@@ -609,11 +624,21 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=False)
 
     # Step 1: Process JSON data from chunk directories
+    exclude_ids = set()
+    if args.exclude_file:
+        if os.path.exists(args.exclude_file):
+            with open(args.exclude_file) as f:
+                exclude_ids = {line.strip() for line in f if line.strip()}
+            print(f"Excluding {len(exclude_ids)} protein ids from {args.exclude_file}")
+        else:
+            print(f"Exclusion file not found, scoring all proteins: {args.exclude_file}")
+
     predictions, ground_truth = process_json_data(
         INPUT_DIR, 
         REASONING_MODE, 
         FINAL_ANSWER_ONLY,
-        go_dag
+        go_dag,
+        exclude_ids=exclude_ids or None,
     )
 
     if not predictions:

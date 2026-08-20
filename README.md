@@ -170,8 +170,12 @@ The pipeline runs three sequential stages on a single GPU:
    **This stage dominates wall-clock time and is highly variable**: measured 94 s and 633 s for
    two proteins submitted together, depending on EBI queue load. A run that appears stuck here
    is usually just waiting. Each job gives up after 30 minutes rather than hanging forever.
-2. **GO-GPT** (GPU) — Loads the GO-GPT model to predict Gene Ontology terms. Unloads from GPU after completion.
-3. **BioReason-Pro** (GPU) — Downloads the selected model checkpoint from HuggingFace, loads it, and generates functional annotations in batches.
+2. **GO-GPT** (GPU) — Loads the GO-GPT model to predict Gene Ontology terms. One protein at a time. Unloads from GPU after completion.
+3. **BioReason-Pro** (GPU) — Downloads the selected model checkpoint from HuggingFace, loads it, and generates functional annotations in batches of `--batch_size`.
+
+Only stage 3 is batched. Stages 1 and 2 are per-protein, so raising `--batch_size` speeds up
+the last stage but not the run as a whole. All three stages checkpoint to disk, so `--resume`
+picks up where a previous run stopped.
 
 Model checkpoints and GO embeddings are automatically downloaded from HuggingFace — no manual setup required.
 
@@ -180,7 +184,7 @@ Model checkpoints and GO embeddings are automatically downloaded from HuggingFac
 ```
 --model_type {sft,rl}   Model checkpoint to use (default: rl)
 --resume                Resume from checkpoints / skip completed proteins
---batch_size N          Batch size for BioReason-Pro inference (default: 4)
+--batch_size N          Batch size for BioReason-Pro inference (default: 16)
 --max_new_tokens N      Maximum tokens to generate (default: 5000)
 --temperature F         Sampling temperature (default: 0.0)
 --top_p F               Top-p sampling (default: 0.95)
@@ -329,7 +333,16 @@ The hyperparameters inside that script must match the run that produced the chec
 
 ### Evaluation
 
-Evaluation is three steps: convert (above), generate predictions, then score them.
+Two ways to run the model, depending on whether its inputs already exist:
+
+| | `eval.py` | `predict.py` |
+|---|---|---|
+| Input | A released dataset, with InterPro and GO-GPT already in the columns | Raw sequences in a TSV |
+| Work per protein | None — straight to batched generation | InterProScan (network) then GO-GPT, one protein at a time |
+| Speed | Bounded by generation; scales with `--batch_size` and across GPUs | Bounded by InterProScan, which can take minutes per protein |
+
+Use `eval.py` to reproduce benchmark numbers, `predict.py` for proteins of your own. The rest
+of this section is `eval.py`: convert (above), generate predictions, then score them.
 
 **1. Generate.** Edit the `Paths` block of `scripts/sh_eval.sh` (`GO_EMBEDDINGS_PATH`,
 `DATASET_CACHE_DIR`, `STRUCTURE_DIR`, and `MODEL_PATH` — either your own checkpoint or a
@@ -350,18 +363,17 @@ To score a released checkpoint without training anything, point `MODEL_PATH` at 
 [`wanglab/bioreason-pro-sft`](https://huggingface.co/wanglab/bioreason-pro-sft) or
 [`wanglab/bioreason-pro-rl`](https://huggingface.co/wanglab/bioreason-pro-rl).
 
-**A note on PPI.** Training includes STRING interaction partners in the prompt
-(`PPI_IN_PROMPT=True`), but the released test set has no `ppi_formatted` column, so
-evaluation runs without them and `scripts/sh_eval.sh` sets `PPI_IN_PROMPT=False`
-accordingly. This asymmetry is inherent to the released data, not a misconfiguration —
-but it does mean the evaluation prompt differs from the training prompt.
+**Throughput.** `--batch_size` is how many sequences vLLM decodes concurrently and is the
+main lever; `--gpu_memory_utilization` is vLLM's share of the GPU only, since ESM3, the GO
+encoder and the batch's prompt embeddings are allocated outside it. Shard across GPUs with
+`NUM_CHUNKS`/`CHUNK_ID`; each shard writes into the same directory and skips what is done.
 
 > **Two things that will silently give you wrong numbers.**
 > The GO encoder flags at evaluation must match training exactly
 > (`512 / 3 / 8 / 200 / 2560`, `--unified_go_encoder True`, `--protein_embedding_layer 37`) or
 > the projector loads mismatched weights.
 > And `--max_new_tokens` must be large enough for the model to finish reasoning and emit its
-> GO summary — the default of 5000 is sized for this. Truncating the generation produces
+> GO summary — the default of 3000 is sized for this. Truncating the generation produces
 > parseable-but-empty predictions and an Fmax near zero, which looks like a bad model rather
 > than a bad setting.
 

@@ -87,13 +87,21 @@ fi
 # ===================================================================================================
 MAX_SAMPLES=-1
 MAX_LENGTH_PROTEIN=2000
-MAX_NEW_TOKENS=5000
+MAX_NEW_TOKENS=3000
 TEMPERATURE=0
 TOP_P=0.95
 REPETITION_PENALTY=1.0
 PASS_AT_K=1
 PROTEIN_EMBEDDING_LAYER=37
 UNIFIED_GO_ENCODER=True
+
+# Throughput. BATCH_SIZE is how many sequences vLLM decodes at once.
+# GPU_MEMORY_UTILIZATION is vLLM's share only; ESM3, the GO encoder and the
+# batch's prompt embeddings live outside it.
+BATCH_SIZE=16
+GPU_MEMORY_UTILIZATION=0.5
+MAX_NUM_SEQS=256
+MAX_MODEL_LEN=8192
 
 # GO Model Architecture (must match training config)
 GO_HIDDEN_DIM=512
@@ -155,6 +163,10 @@ python "$EVAL_SCRIPT" \
     --go_num_heads $GO_NUM_HEADS \
     --go_num_reduced_embeddings $GO_NUM_REDUCED_EMBEDDINGS \
     --go_embedding_dim $GO_EMBEDDING_DIM \
+    --max_model_len $MAX_MODEL_LEN \
+    --gpu_memory_utilization $GPU_MEMORY_UTILIZATION \
+    --max_num_seqs $MAX_NUM_SEQS \
+    --batch_size $BATCH_SIZE \
     --cafa5_dataset "$HF_DATASET_REPO" \
     --cafa5_dataset_name "$DATASET_NAME" \
     --reasoning_dataset_name "$REASONING_DATASET_NAME" \
