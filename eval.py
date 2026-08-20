@@ -379,9 +379,12 @@ def run_local_inference(args):
         print_final_statistics(successfully_processed, dt, args.evals_path)
 
     except Exception as e:
+        # Must not swallow this. A sharded evaluation that dies here but exits 0
+        # looks COMPLETED to the scheduler, and the missing shard is only noticed
+        # when someone counts the output files.
         print(f"Critical Error: {e}")
         traceback.print_exc()
-        return
+        raise SystemExit(1)
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:
