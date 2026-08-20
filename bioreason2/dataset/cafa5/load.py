@@ -194,7 +194,7 @@ def _add_uniprot_summary(example):
     return final_answer
 
 
-def _format_reasoning_prompt(example, go_gpt_predictions_column=None, interpro_in_prompt=False, ppi_in_prompt=False, include_ground_truth_in_final_answer=False, add_uniprot_summary=False, is_swissprot=False, ask_all_go_aspects=False):
+def _format_reasoning_prompt(example, go_gpt_predictions_column=None, interpro_in_prompt=False, ppi_in_prompt=False, include_ground_truth_in_final_answer=False, add_uniprot_summary=False, is_swissprot=False, ask_all_go_aspects=False, force_uniprot_summary=False):
     """Format reasoning data into prompt structure.
     
     Args:
@@ -240,8 +240,21 @@ def _format_reasoning_prompt(example, go_gpt_predictions_column=None, interpro_i
         go_aspects_suffix = f" and focus more on its {', '.join(go_aspects)}." if go_aspects else "."
     
     # Prepare UniProt summary suffix and assistant answer
-    protein_function = example.get("protein_function", "")
-    uniprot_summary = " Summarize in UniProt format."
+    protein_function = example.get("protein_function", "") or ""
+
+    # Ask for a UniProt-style summary only when the target actually contains one.
+    # protein_function is literally "Not known" for ~43% of the training set, and
+    # _add_uniprot_summary writes that straight into the answer -- so instructing
+    # "Summarize in UniProt format." there trains the model on a contradiction:
+    # asked to summarise, shown "Not known".
+    # At inference there is no target to be consistent with and a summary is always
+    # wanted, so callers pass force_uniprot_summary=True.
+    _pf = protein_function.strip()
+    _has_function = bool(_pf) and "not known" not in _pf.lower()
+    if force_uniprot_summary or _has_function:
+        uniprot_summary = " Summarize in UniProt format."
+    else:
+        uniprot_summary = " Don't summarize in UniProt format."
     assistant_answer = _add_uniprot_summary(example) if add_uniprot_summary else (example["final_answer"] if "final_answer" in example else "")
     
     # Handle SwissProt template with dynamic system prompt
@@ -455,6 +468,7 @@ def _process_dataset_split(
     add_uniprot_summary=False,
     is_swissprot=False,
     ask_all_go_aspects=False,
+    force_uniprot_summary=False,
 ):
     """Process a single dataset split with all transformations."""
     # For testing, limit to 50 datapoints
@@ -506,6 +520,7 @@ def _process_dataset_split(
                     "ppi_in_prompt": ppi_in_prompt,
                     "include_ground_truth_in_final_answer": include_ground_truth_in_final_answer,
                     "add_uniprot_summary": add_uniprot_summary,
+                    "force_uniprot_summary": force_uniprot_summary,
                     "is_swissprot": is_swissprot,
                     "ask_all_go_aspects": ask_all_go_aspects,
                 },
@@ -591,6 +606,7 @@ def load_cafa5_dataset(
     go_gpt_predictions_column: str = None,
     include_ground_truth_in_final_answer: bool = True,
     add_uniprot_summary: bool = False,
+    force_uniprot_summary: bool = False,
     is_swissprot: bool = False,
     ask_all_go_aspects: bool = False,
 ):
@@ -806,6 +822,7 @@ def load_cafa5_dataset(
                         add_uniprot_summary=add_uniprot_summary,
                         is_swissprot=is_swissprot,
                         ask_all_go_aspects=ask_all_go_aspects,
+                        force_uniprot_summary=force_uniprot_summary,
                     )
                 return None
 
@@ -882,6 +899,7 @@ def load_cafa5_dataset(
                             "ppi_in_prompt": ppi_in_prompt,
                             "include_ground_truth_in_final_answer": include_ground_truth_in_final_answer,
                             "add_uniprot_summary": add_uniprot_summary,
+                            "force_uniprot_summary": force_uniprot_summary,
                             "is_swissprot": is_swissprot,
                             "ask_all_go_aspects": ask_all_go_aspects,
                         },
