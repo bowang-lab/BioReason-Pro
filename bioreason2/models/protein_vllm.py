@@ -560,7 +560,10 @@ class ProteinLLMModel(nn.Module):
             temperature=generation_kwargs.get("temperature", 0),
             top_p=generation_kwargs.get("top_p", 0.95),
             max_tokens=generation_kwargs.get("max_new_tokens", 1000),
+            # Intentional: cuts the answer before the speculative interaction-partner
+            # section. Keep unless you explicitly want that section in the output.
             stop=generation_kwargs.get("stop", ["<|im_end|>"]) + ["- Hypothesized Interaction Partners"],
+            repetition_penalty=generation_kwargs.get("repetition_penalty", 1.0),
         )
 
         # Build requests for vLLM generation

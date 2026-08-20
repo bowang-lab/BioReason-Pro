@@ -31,6 +31,10 @@ cd "$REPO_ROOT"
 export PYTHONUNBUFFERED=1
 export PYTHONDONTWRITEBYTECODE=1
 
+# Without an entity, do not fall through to the code default (another user's
+# account) -- run W&B offline instead.
+if [ -z "${WANDB_ENTITY:-}" ]; then export WANDB_MODE="${WANDB_MODE:-offline}"; fi
+
 unset SLURM_TRES_PER_TASK
 # ===================================================================================================
 
@@ -40,7 +44,8 @@ unset SLURM_TRES_PER_TASK
 # Shared Configuration
 # ===================================================================================================
 BASE_WANDB_PROJECT="bioreason-pro-finetune"
-WANDB_ENTITY="${WANDB_ENTITY:-}"    # your W&B entity, or leave empty to use the default
+WANDB_ENTITY="${WANDB_ENTITY:-}"    # your W&B entity. Leave empty to disable W&B entirely
+                                    # (the code default is another user's account).
 TEXT_MODEL_NAME="Qwen/Qwen3-4B-Thinking-2507"
 EXPERIMENT_NAME="reasoning-sft"
 
@@ -83,9 +88,13 @@ PREDICT_INTERPRO=False
 PPI_IN_PROMPT=True
 
 
-BASE_COMMAND="srun python train_protein_llm.py \
+# Use srun only under SLURM, so this script also runs directly on one machine.
+LAUNCHER=""
+if [ -n "${SLURM_JOB_ID:-}" ]; then LAUNCHER="srun"; fi
+
+BASE_COMMAND="$LAUNCHER python train_protein_llm.py \
     --cache_dir $CACHE_DIR \
-    ${WANDB_ENTITY:+--wandb_entity $WANDB_ENTITY} \
+    ${WANDB_ENTITY:+--wandb_entity "$WANDB_ENTITY"} \
     --text_model_name ${TEXT_MODEL_NAME} \
     --protein_model_name esm3_sm_open_v1 \
     --strategy ddp_find_unused_parameters_false \
@@ -105,7 +114,7 @@ BASE_COMMAND="srun python train_protein_llm.py \
     --is_swissprot $IS_SWISSPROT \
     --dataset_cache_dir $DATASET_CACHE_DIR \
     --cache_dir $CACHE_DIR \
-    --structure_dir $STRUCTURE_DIR \
+    ${STRUCTURE_DIR:+--structure_dir "$STRUCTURE_DIR"} \
     --val_split_ratio 0.1 \
     --max_length_protein $MAX_LENGTH_PROTEIN \
     --max_length_text $MAX_LENGTH_TEXT \

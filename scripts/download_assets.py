@@ -135,9 +135,15 @@ def download_structures(dest_dir: str, num_workers: int, keep_archives: bool,
     os.makedirs(archive_dir, exist_ok=True)
 
     def one(shard: str) -> tuple:
-        path = hf_hub_download(
-            STRUCTURES_REPO, shard, repo_type="dataset", cache_dir=archive_dir
-        )
+        # local_dir puts a real file here rather than a symlink into a blob cache,
+        # so deleting it actually reclaims the space. With cache_dir the blob
+        # survives and the full ~34 GB of shards accumulates.
+        kwargs = dict(repo_type="dataset")
+        if keep_archives:
+            kwargs["cache_dir"] = archive_dir
+        else:
+            kwargs["local_dir"] = archive_dir
+        path = hf_hub_download(STRUCTURES_REPO, shard, **kwargs)
         n = _extract_shard(path, dest_dir, keep)
         if not keep_archives:
             try:
