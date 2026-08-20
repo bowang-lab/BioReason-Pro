@@ -108,6 +108,9 @@ def load_dataset(args):
         min_go_cc_freq=args.min_go_cc_freq,
         apply_go_filtering_to_val_test=args.apply_go_filtering_to_val_test,
         add_uniprot_summary=args.add_uniprot_summary,
+        # At inference there is no target to stay consistent with and a summary is
+        # always wanted, so always instruct the model to produce one.
+        force_uniprot_summary=True,
         debug=args.debug,
     )
     val_ds = val_ds.shuffle(seed=args.seed)
