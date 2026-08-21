@@ -119,11 +119,10 @@ REASONING_DATASET_NAME="default"
 SPLIT_GO_ASPECTS=False
 INTERPRO_IN_PROMPT=True
 PREDICT_INTERPRO=False
-# True reproduces the published benchmark. False now drops only the PPI section.
+# Either works. False drops only the PPI section from the prompt.
 PPI_IN_PROMPT=True
 
-# True keeps the prompt independent of the example's labels (matches predict.py).
-# Set both False to reproduce the published benchmark numbers.
+# Keep True: the prompt then never depends on the example's own labels.
 ASK_ALL_GO_ASPECTS=True
 FORCE_UNIPROT_SUMMARY=True
 GO_GPT_PREDICTIONS_COLUMN="go_pred"

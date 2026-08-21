@@ -359,6 +359,9 @@ bash scripts/sh_eval.sh
 bash evals/run_cafa_eval.sh <evals_path> [output_dir]
 ```
 
+`wanglab/bioreason-pro-sft` at the settings above scores Fmax 0.569 BP / 0.769 MF / 0.780 CC
+over the 8,630-protein test set.
+
 To score a released checkpoint without training anything, point `MODEL_PATH` at a snapshot of
 [`wanglab/bioreason-pro-sft`](https://huggingface.co/wanglab/bioreason-pro-sft) or
 [`wanglab/bioreason-pro-rl`](https://huggingface.co/wanglab/bioreason-pro-rl).

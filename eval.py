@@ -119,9 +119,7 @@ def load_dataset(args):
         min_go_cc_freq=args.min_go_cc_freq,
         apply_go_filtering_to_val_test=args.apply_go_filtering_to_val_test,
         add_uniprot_summary=args.add_uniprot_summary,
-        # Default True: the prompt never depends on the example's own labels, and
-        # matches predict.py. Set both False to reproduce the published benchmark,
-        # whose prompts did derive these from the labels.
+        # True keeps the prompt independent of the example's own labels.
         force_uniprot_summary=args.force_uniprot_summary,
         ask_all_go_aspects=args.ask_all_go_aspects,
         debug=args.debug,
@@ -503,12 +501,12 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     dataset_group.add_argument(
         "--ask_all_go_aspects", type=str2bool, default=True,
         help="Ask for all three GO aspects instead of deriving them from the "
-             "example's labels. False reproduces the published benchmark.",
+             "example's labels. Keep True.",
     )
     dataset_group.add_argument(
         "--force_uniprot_summary", type=str2bool, default=True,
         help="Always request a UniProt summary instead of conditioning on whether "
-             "the protein has a known function. False reproduces the benchmark.",
+             "the protein has a known function.",
     )
     dataset_group.add_argument("--interpro_in_prompt", type=str2bool, default=True)
     dataset_group.add_argument("--predict_interpro", type=str2bool, default=False)
