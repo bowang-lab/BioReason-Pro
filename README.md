@@ -299,13 +299,14 @@ To sanity-check the whole path on a 50-sample slice before committing a long run
 
 ### Training stages
 
-`--training_stage 1` trains only the protein projector and GO encoder with the LLM frozen;
-`--training_stage 2` fine-tunes the whole stack with LoRA. **The released checkpoint was
-produced by Stage 2 alone**, starting from randomly-initialised projectors, which is what the
-script does by default. To run the warm-up first and initialise Stage 2 from its weights:
+`--training_stage 1` trains the protein projector, the GO projection and the GO encoder with the
+LLM frozen; `--training_stage 2` starts from those weights and trains them together with LoRA on
+the LLM. The protein encoder (ESM3) is frozen in both. **The released checkpoint was trained with
+both stages**, which is what the script does by default. To skip Stage 1 and start Stage 2 from
+randomly-initialised projectors:
 
 ```bash
-RUN_STAGE1=true sbatch scripts/sh_train_protein_qwen_staged.sh
+RUN_STAGE1=false sbatch scripts/sh_train_protein_qwen_staged.sh
 ```
 
 ### Key hyperparameters

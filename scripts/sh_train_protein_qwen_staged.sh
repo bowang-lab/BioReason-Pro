@@ -185,11 +185,12 @@ fi
 # ===================================================================================================
 # --- Stage 1: Warm-up (Projector + GO Training) ---
 #
-# OFF by default: the released BioReason-Pro SFT checkpoint was trained with
-# Stage 2 only, starting from randomly-initialised projectors. Set RUN_STAGE1=true
-# to run the warm-up first and initialise Stage 2 from its projector / GO weights.
+# ON by default: the released BioReason-Pro SFT checkpoint was trained with both
+# stages. Stage 1 trains the protein projector, GO projection and GO encoder with the
+# LLM frozen; Stage 2 starts from those weights and trains them with LoRA on the LLM.
+# ESM3 is frozen in both. Set RUN_STAGE1=false to start Stage 2 from random projectors.
 # ===================================================================================================
-RUN_STAGE1="${RUN_STAGE1:-false}"
+RUN_STAGE1="${RUN_STAGE1:-true}"
 STAGE1_ARGS=""
 
 if [ "$RUN_STAGE1" = "true" ]; then
