@@ -3,11 +3,15 @@
 </h1>
 
 <p align="center">
+  <a href="https://github.com/NVIDIA-BioNeMo/BioReason-Pro-2"><img src="https://img.shields.io/badge/NEW-BioReason--Pro_2-F26B21?style=for-the-badge&logo=github&logoColor=white" alt="BioReason-Pro 2"></a>
   <a href="https://www.biorxiv.org/content/10.64898/2026.03.19.712954v1" target="_blank"><img src="https://img.shields.io/badge/bioRxiv-2026.03.19.712954-FF6B6B?style=for-the-badge&logo=arxiv&logoColor=white" alt="bioRxiv"></a>
   <a href="https://github.com/bowang-lab/BioReason-Pro"><img src="https://img.shields.io/badge/GitHub-Code-4A90E2?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>
   <a href="https://bioreason.net"><img src="https://img.shields.io/badge/Website-Online-00B89E?style=for-the-badge&logo=internet-explorer&logoColor=white" alt="Website"></a>
   <a href="https://huggingface.co/collections/wanglab/bioreason-pro"><img src="https://img.shields.io/badge/HuggingFace-Models & Data-FFBF00?style=for-the-badge&logo=huggingface&logoColor=white" alt="HuggingFace"></a>
 </p>
+
+> [!IMPORTANT]
+> **BioReason-Pro 2 is out.** New models, code and a hypothesis atlas are at **[NVIDIA-BioNeMo/BioReason-Pro-2](https://github.com/NVIDIA-BioNeMo/BioReason-Pro-2)**. Read about it in the [blog post](https://www.goodfire.com/research/building-stronger-biological-reasoning-models/).
 
 <br>
 
